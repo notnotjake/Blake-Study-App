@@ -1,10 +1,3 @@
-//
-//  StudyAppApp.swift
-//  StudyApp
-//
-//  Created by Blake Pawluk on 6/17/25.
-//
-
 import SwiftUI
 
 @main
