@@ -8,7 +8,6 @@ import CoreData
 import AVFoundation
 import UniformTypeIdentifiers
 
-import SymbolPicker
 import MCEmojiPicker
 
 // MARK: - Flash Audio Manager
