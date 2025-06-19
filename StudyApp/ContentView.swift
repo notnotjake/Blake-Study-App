@@ -8,6 +8,9 @@ import CoreData
 import AVFoundation
 import UniformTypeIdentifiers
 
+import SymbolPicker
+import MCEmojiPicker
+
 // MARK: - Flash Audio Manager
 class FlashAudioManager {
     static let shared = FlashAudioManager()
@@ -366,28 +369,63 @@ struct CreateDeckView: View {
     @State private var navigateToDeck = false
     @State private var createdDeck: Deck?
     
-    private let commonEmojis = ["📚", "🧠", "💡", "🎓", "📖", "✏️", "🔬", "🎨", "🌍", "💻", "🎵", "⚽️"]
+    @State private var isPickerPresented = false
+    
+    private let commonEmojis = ["📚", "🧠", "💡", "🎓", "📖", "✏️", "🎨", "🌍", "💻", "🎵", "⚽️"]
     
     var body: some View {
         NavigationView {
             VStack(spacing: 24) {
                 VStack(spacing: 16) {
-                    Text("Create New Deck")
-                        .font(.title2)
-                        .fontWeight(.semibold)
                     
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Deck Name")
-                            .font(.headline)
+                            .font(.headline.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal)
                         TextField("Enter deck name", text: $deckName)
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
+                            .textFieldStyle(.plain)
+                            .padding()
+                            .background(Color(.systemBackground))
+                            .cornerRadius(15)
                     }
                     
+                    
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Choose an Emoji")
-                            .font(.headline)
+                        Text("Icon")
+                            .font(.headline.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal)
                         
                         LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 6), spacing: 12) {
+                            Button(action: {
+                                isPickerPresented.toggle()
+                            }) {
+                                Group {
+                                    if commonEmojis.contains(selectedEmoji) {
+                                        // Show plus icon when a preset emoji is selected
+                                        Image(systemName: "plus")
+                                            .font(.system(size: 20, weight: .medium))
+                                            .foregroundColor(.secondary)
+                                    } else {
+                                        // Show the custom selected emoji
+                                        Text(selectedEmoji)
+                                            .font(.system(size: 30))
+                                    }
+                                }
+                                .frame(width: 50, height: 50)
+                                .background(Color.secondary.opacity(0.15))
+                                .clipShape(Circle())
+                                .overlay(
+                                    // Show border when custom emoji is selected
+                                    Circle()
+                                        .stroke(Color.blue, lineWidth: 2)
+                                        .scaleEffect(1.1)
+                                        .opacity(commonEmojis.contains(selectedEmoji) ? 0 : 1)
+                                )
+                            }
+                            .emojiPicker(isPresented: $isPickerPresented, selectedEmoji: $selectedEmoji)
+                            
                             ForEach(commonEmojis, id: \.self) { emoji in
                                 Button(action: {
                                     selectedEmoji = emoji
@@ -395,25 +433,29 @@ struct CreateDeckView: View {
                                     Text(emoji)
                                         .font(.system(size: 30))
                                         .frame(width: 50, height: 50)
-                                        .background(selectedEmoji == emoji ? Color.blue.opacity(0.2) : Color.clear)
+                                        .background(selectedEmoji == emoji ? Color.blue.opacity(0.3) : Color.secondary.opacity(0.15))
                                         .cornerRadius(8)
+                                        .clipShape(Circle())
+                                        .overlay(
+                                            Circle()
+                                                .stroke(Color.blue, lineWidth: 2)
+                                                .scaleEffect(1.1)
+                                                .opacity(selectedEmoji == emoji ? 1 : 0)
+                                        )
                                 }
                             }
                         }
-                        
-                        HStack {
-                            Text("Or enter custom:")
-                            TextField("🎯", text: $selectedEmoji)
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
-                                .frame(width: 60)
-                        }
+                        .padding()
+                        .background(Color(.systemBackground))
+                        .cornerRadius(15)
                     }
                 }
                 .padding()
                 
                 Spacer()
             }
-            .navigationTitle("New Deck")
+            .background(Color(.systemGroupedBackground))
+            .navigationTitle("Create New Deck")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -808,7 +850,7 @@ struct CreateFlashcardView: View {
                         saveFlashcard()
                     }
                     .disabled(frontText1.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-                             backText1.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                              backText1.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }
@@ -1022,7 +1064,7 @@ struct UserDefaultsAudioView: View {
                 let player = try AVAudioPlayer(contentsOf: audioURL)
                 player.prepareToPlay()
                 
-                                    // Switch to main thread for UI updates and playback
+                // Switch to main thread for UI updates and playback
                 DispatchQueue.main.async {
                     self.audioPlayer = player
                     

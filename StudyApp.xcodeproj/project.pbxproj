@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		237F90F62E0481CB007A5C1C /* MCEmojiPicker in Frameworks */ = {isa = PBXBuildFile; productRef = 237F90F52E0481CB007A5C1C /* MCEmojiPicker */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		2AA3C8642E0140C500176EEB /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -52,6 +56,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				237F90F62E0481CB007A5C1C /* MCEmojiPicker in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -112,6 +117,7 @@
 			);
 			name = StudyApp;
 			packageProductDependencies = (
+				237F90F52E0481CB007A5C1C /* MCEmojiPicker */,
 			);
 			productName = StudyApp;
 			productReference = 2AA3C8512E0140C400176EEB /* StudyApp.app */;
@@ -195,6 +201,9 @@
 			);
 			mainGroup = 2AA3C8482E0140C400176EEB;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				237F90F42E0481CB007A5C1C /* XCRemoteSwiftPackageReference "MCEmojiPicker" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 2AA3C8522E0140C400176EEB /* Products */;
 			projectDirPath = "";
@@ -574,6 +583,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		237F90F42E0481CB007A5C1C /* XCRemoteSwiftPackageReference "MCEmojiPicker" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/izyumkin/MCEmojiPicker";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.2.3;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		237F90F52E0481CB007A5C1C /* MCEmojiPicker */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 237F90F42E0481CB007A5C1C /* XCRemoteSwiftPackageReference "MCEmojiPicker" */;
+			productName = MCEmojiPicker;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 2AA3C8492E0140C400176EEB /* Project object */;
 }
