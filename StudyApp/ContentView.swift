@@ -385,7 +385,7 @@ struct CreateDeckView: View {
                         TextField("Enter deck name", text: $deckName)
                             .textFieldStyle(.plain)
                             .padding()
-                            .background(Color(.systemBackground))
+                            .background(Color(.secondarySystemGroupedBackground))
                             .cornerRadius(15)
                     }
                     
@@ -445,7 +445,7 @@ struct CreateDeckView: View {
                             }
                         }
                         .padding()
-                        .background(Color(.systemBackground))
+                        .background(Color(.secondarySystemGroupedBackground))
                         .cornerRadius(15)
                     }
                 }
