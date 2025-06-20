@@ -795,41 +795,65 @@ struct CreateFlashcardView: View {
             ScrollView {
                 VStack(spacing: 24) {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("Front Side")
-                            .font(.headline)
-                        
-                        VStack(spacing: 8) {
-                            TextField("Enter front text 1", text: $frontText1)
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
-                            TextField("Enter front text 2 (optional)", text: $frontText2)
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Front Side")
+                                .font(.headline.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal)
+                            VStack(spacing: 8) {
+                                TextField("Front text", text: $frontText1)
+                                    .textFieldStyle(.plain)
+                                    .padding()
+                                Divider()
+                                    .padding(.leading)
+                                TextField("Front secondary text", text: $frontText2)
+                                    .textFieldStyle(.plain)
+                                    .padding()
+                            }
+                            .background(Color(.secondarySystemGroupedBackground))
+                            .cornerRadius(15)
                         }
                         
-                        UserDefaultsAudioView(
-                            title: "Front Audio",
-                            flashcardID: flashcardID,
-                            side: "front"
-                        )
+                        VStack {
+                            UserDefaultsAudioView(
+                                title: "Audio",
+                                flashcardID: flashcardID,
+                                side: "front"
+                            )
+                        }
+                        .padding(.horizontal)
                     }
                     
                     Divider()
                     
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("Back Side")
-                            .font(.headline)
-                        
-                        VStack(spacing: 8) {
-                            TextField("Enter back text 1", text: $backText1)
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
-                            TextField("Enter back text 2 (optional)", text: $backText2)
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Back Side")
+                                .font(.headline.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal)
+                            VStack(spacing: 8) {
+                                TextField("Back text", text: $backText1)
+                                    .textFieldStyle(.plain)
+                                    .padding()
+                                Divider()
+                                    .padding(.leading)
+                                TextField("Back secondary text", text: $backText2)
+                                    .textFieldStyle(.plain)
+                                    .padding()
+                            }
+                            .background(Color(.secondarySystemGroupedBackground))
+                            .cornerRadius(15)
                         }
                         
-                        UserDefaultsAudioView(
-                            title: "Back Audio",
-                            flashcardID: flashcardID,
-                            side: "back"
-                        )
+                        VStack {
+                            UserDefaultsAudioView(
+                                title: "Audio",
+                                flashcardID: flashcardID,
+                                side: "back"
+                            )
+                        }
+                        .padding(.horizontal)
                     }
                 }
                 .padding()
@@ -892,7 +916,7 @@ struct UserDefaultsAudioView: View {
     @State private var audioDelegate: AudioPlayerDelegate?
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        HStack(spacing: 8) {
             Text(title)
                 .font(.subheadline)
                 .fontWeight(.medium)
@@ -907,12 +931,14 @@ struct UserDefaultsAudioView: View {
                 }) {
                     HStack(spacing: 4) {
                         Image(systemName: isRecording ? "stop.circle.fill" : "mic.circle.fill")
-                            .foregroundColor(isRecording ? .red : .blue)
+                            .foregroundColor(isRecording ? .red : .white)
                         Text(isRecording ? "Stop" : "Record")
                             .font(.caption)
+                            .fixedSize()
                     }
                 }
-                .buttonStyle(BorderedButtonStyle())
+                .buttonStyle(.borderedProminent)
+                .clipShape(.capsule)
                 
                 Button(action: {
                     showingAudioPicker = true
@@ -922,9 +948,11 @@ struct UserDefaultsAudioView: View {
                             .foregroundColor(.blue)
                         Text("Import")
                             .font(.caption)
+                            .fixedSize()
                     }
                 }
-                .buttonStyle(BorderedButtonStyle())
+                .buttonStyle(.bordered)
+                .clipShape(.capsule)
                 
                 if hasAudio {
                     Button(action: {
