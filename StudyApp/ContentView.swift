@@ -1,6 +1,6 @@
 //
 //  ContentView.swift
-//  StudyApp - Complete Fixed Version with Audio Fix
+//  StudyApp - Complete Fixed Version with Audio Fix and Swipe-to-Delete
 //
 
 import SwiftUI
@@ -9,6 +9,175 @@ import AVFoundation
 import UniformTypeIdentifiers
 
 import MCEmojiPicker
+
+// MARK: - Flash Photo Manager
+class FlashPhotoManager {
+    static let shared = FlashPhotoManager()
+    
+    private let photoDirectory: URL
+    private let userDefaults = UserDefaults.standard
+    
+    private init() {
+        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        photoDirectory = documentsPath.appendingPathComponent("FlashcardPhotos")
+        
+        // Create directory if it doesn't exist
+        try? FileManager.default.createDirectory(at: photoDirectory, withIntermediateDirectories: true)
+        
+        print("📷 Photo directory: \(photoDirectory.path)")
+        verifyPhotoFiles()
+    }
+    
+    private func verifyPhotoFiles() {
+        let photoKeys = userDefaults.dictionaryRepresentation().keys.filter { $0.hasPrefix("photo_") }
+        var fixedCount = 0
+        var removedCount = 0
+        
+        for key in photoKeys {
+            if let storedPath = userDefaults.string(forKey: key) {
+                if FileManager.default.fileExists(atPath: storedPath) {
+                    // Check if path needs updating to current directory
+                    if !storedPath.contains(photoDirectory.path) {
+                        let fileName = URL(fileURLWithPath: storedPath).lastPathComponent
+                        let correctPath = photoDirectory.appendingPathComponent(fileName).path
+                        
+                        if FileManager.default.fileExists(atPath: correctPath) {
+                            userDefaults.set(correctPath, forKey: key)
+                            fixedCount += 1
+                        }
+                    }
+                } else {
+                    // Try to find the file with expected naming
+                    let components = key.components(separatedBy: "_")
+                    if components.count >= 3 {
+                        let flashcardID = components[1]
+                        let side = components[2]
+                        
+                        // Look for files with different extensions
+                        let extensions = ["jpg", "jpeg", "png", "heic", "heif"]
+                        var foundFile = false
+                        
+                        for ext in extensions {
+                            let expectedFileName = "\(flashcardID)_\(side).\(ext)"
+                            let expectedPath = photoDirectory.appendingPathComponent(expectedFileName).path
+                            
+                            if FileManager.default.fileExists(atPath: expectedPath) {
+                                userDefaults.set(expectedPath, forKey: key)
+                                fixedCount += 1
+                                foundFile = true
+                                break
+                            }
+                        }
+                        
+                        if !foundFile {
+                            userDefaults.removeObject(forKey: key)
+                            removedCount += 1
+                        }
+                    }
+                }
+            }
+        }
+        
+        if fixedCount > 0 || removedCount > 0 {
+            userDefaults.synchronize()
+            print("📷 Photo verification: fixed \(fixedCount), removed \(removedCount)")
+        }
+    }
+    
+    func savePhoto(from sourceURL: URL, flashcardID: String, side: String) -> Bool {
+        let fileExtension = sourceURL.pathExtension.lowercased()
+        let validExtensions = ["jpg", "jpeg", "png", "heic", "heif"]
+        
+        guard validExtensions.contains(fileExtension) else {
+            print("❌ Invalid photo format: \(fileExtension)")
+            return false
+        }
+        
+        let fileName = "\(flashcardID)_\(side).\(fileExtension)"
+        let destinationURL = photoDirectory.appendingPathComponent(fileName)
+        
+        do {
+            // Remove existing photo if it exists (any extension)
+            deletePhoto(flashcardID: flashcardID, side: side)
+            
+            try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
+            
+            let key = "photo_\(flashcardID)_\(side)"
+            userDefaults.set(destinationURL.path, forKey: key)
+            userDefaults.synchronize()
+            
+            return FileManager.default.fileExists(atPath: destinationURL.path)
+            
+        } catch {
+            print("❌ Error saving photo: \(error)")
+            return false
+        }
+    }
+    
+    func getPhotoPath(flashcardID: String, side: String) -> String? {
+        let key = "photo_\(flashcardID)_\(side)"
+        
+        if let storedPath = userDefaults.string(forKey: key) {
+            if FileManager.default.fileExists(atPath: storedPath) {
+                return storedPath
+            }
+        }
+        
+        // Try to find the file with different extensions
+        let extensions = ["jpg", "jpeg", "png", "heic", "heif"]
+        for ext in extensions {
+            let expectedFileName = "\(flashcardID)_\(side).\(ext)"
+            let expectedPath = photoDirectory.appendingPathComponent(expectedFileName).path
+            
+            if FileManager.default.fileExists(atPath: expectedPath) {
+                userDefaults.set(expectedPath, forKey: key)
+                userDefaults.synchronize()
+                return expectedPath
+            }
+        }
+        
+        // Clean up broken reference
+        userDefaults.removeObject(forKey: key)
+        userDefaults.synchronize()
+        return nil
+    }
+    
+    func hasPhoto(flashcardID: String, side: String) -> Bool {
+        return getPhotoPath(flashcardID: flashcardID, side: side) != nil
+    }
+    
+    func deletePhoto(flashcardID: String, side: String) {
+        let key = "photo_\(flashcardID)_\(side)"
+        
+        // Remove from UserDefaults
+        if let path = userDefaults.string(forKey: key) {
+            try? FileManager.default.removeItem(atPath: path)
+        }
+        userDefaults.removeObject(forKey: key)
+        
+        // Also try to remove files with any extension
+        let extensions = ["jpg", "jpeg", "png", "heic", "heif"]
+        for ext in extensions {
+            let fileName = "\(flashcardID)_\(side).\(ext)"
+            let filePath = photoDirectory.appendingPathComponent(fileName).path
+            if FileManager.default.fileExists(atPath: filePath) {
+                try? FileManager.default.removeItem(atPath: filePath)
+            }
+        }
+        
+        userDefaults.synchronize()
+    }
+    
+    func deleteAllPhotos(flashcardID: String) {
+        deletePhoto(flashcardID: flashcardID, side: "front")
+        deletePhoto(flashcardID: flashcardID, side: "back")
+    }
+    
+    func syncPhotoData() {
+        userDefaults.synchronize()
+        verifyPhotoFiles()
+    }
+}
 
 // MARK: - Flash Audio Manager
 class FlashAudioManager {
@@ -205,6 +374,8 @@ struct MainMenuView: View {
     @State private var showingCreateDeck = false
     @State private var refreshToggle = false
     @State private var refreshTimer: Timer?
+    @State private var deckToDelete: Deck?
+    @State private var showingDeleteConfirmation = false
     
     var body: some View {
         VStack {
@@ -223,18 +394,57 @@ struct MainMenuView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 12) {
-                        ForEach(decks, id: \.self) { deck in
+                List {
+                    ForEach(decks, id: \.self) { deck in
+                        ZStack {
+                            // Navigation Link (invisible)
                             NavigationLink(destination: DeckPageView(deck: deck)) {
-                                DeckRowView(deck: deck)
+                                EmptyView()
                             }
-                            .buttonStyle(PlainButtonStyle())
+                            .opacity(0)
+                            
+                            // Actual content
+                            HStack(spacing: 16) {
+                                Text(deck.emoji ?? "📚")
+                                    .font(.system(size: 40))
+                                
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(deck.name ?? "Untitled Deck")
+                                        .font(.headline)
+                                        .foregroundColor(.primary)
+                                    
+                                    Text("\(deck.flashcardsArray.count) cards")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                
+                                Spacer()
+                                
+                                if deck.isMastered {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .font(.title2)
+                                        .foregroundColor(.green)
+                                }
+                            }
+                            .padding()
+                            .background(Color(.systemGray6))
+                            .cornerRadius(12)
+                        }
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            Button {
+                                deckToDelete = deck
+                                showingDeleteConfirmation = true
+                            } label: {
+                                Image(systemName: "trash")
+                                    .font(.title2)
+                            }
+                            .tint(.red)
                         }
                     }
-                    .padding(.horizontal)
-                    .padding(.top, 8)
                 }
+                .listStyle(PlainListStyle())
             }
         }
         .navigationTitle("Study Decks")
@@ -252,8 +462,24 @@ struct MainMenuView: View {
         .sheet(isPresented: $showingCreateDeck) {
             CreateDeckView()
         }
+        .alert("Delete Deck", isPresented: $showingDeleteConfirmation) {
+            Button("Cancel", role: .cancel) {
+                deckToDelete = nil
+            }
+            Button("Delete", role: .destructive) {
+                if let deck = deckToDelete {
+                    deleteDeck(deck)
+                }
+                deckToDelete = nil
+            }
+        } message: {
+            if let deck = deckToDelete {
+                Text("Are you sure you want to delete '\(deck.name ?? "this deck")'? This action cannot be undone and will also delete all flashcards and audio recordings in this deck.")
+            }
+        }
         .onAppear {
             FlashAudioManager.shared.syncAudioData()
+            FlashPhotoManager.shared.syncPhotoData()
             FlashAudioManager.shared.listAllAudio()
             startRealTimeTimer()
         }
@@ -262,6 +488,26 @@ struct MainMenuView: View {
         }
         .onChange(of: refreshToggle) { _ in
             updateDeckStatuses()
+        }
+    }
+    
+    private func deleteDeck(_ deck: Deck) {
+        // Delete all audio and photo files for all flashcards in this deck
+        for flashcard in deck.flashcardsArray {
+            if let flashcardID = flashcard.id?.uuidString {
+                FlashAudioManager.shared.deleteAllAudio(flashcardID: flashcardID)
+                FlashPhotoManager.shared.deleteAllPhotos(flashcardID: flashcardID)
+            }
+        }
+        
+        // Delete the deck from Core Data
+        viewContext.delete(deck)
+        
+        do {
+            try viewContext.save()
+            print("✅ Deck deleted successfully")
+        } catch {
+            print("❌ Error deleting deck: \(error)")
         }
     }
     
@@ -512,6 +758,8 @@ struct DeckPageView: View {
     @State private var showingReviewMode = false
     @State private var refreshToggle = false
     @State private var refreshTimer: Timer?
+    @State private var flashcardToDelete: Flashcard?
+    @State private var showingDeleteConfirmation = false
     
     private var cardsNeedingReview: [Flashcard] {
         deck.flashcardsArray.filter { $0.needsReview }
@@ -544,18 +792,84 @@ struct DeckPageView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 12) {
-                        ForEach(deck.flashcardsArray, id: \.self) { flashcard in
+                List {
+                    ForEach(deck.flashcardsArray, id: \.self) { flashcard in
+                        ZStack {
+                            // Navigation Link (invisible)
                             NavigationLink(destination: FlashcardDetailView(flashcard: flashcard)) {
-                                FlashcardRowView(flashcard: flashcard)
+                                EmptyView()
                             }
-                            .buttonStyle(PlainButtonStyle())
+                            .opacity(0)
+                            
+                            // Actual content
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("Front")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                        Text(flashcard.frontText1 ?? "")
+                                            .font(.body)
+                                            .lineLimit(2)
+                                    }
+                                    
+                                    Spacer()
+                                    
+                                    HStack(spacing: 4) {
+                                        if FlashAudioManager.shared.hasAudio(flashcardID: flashcard.id?.uuidString ?? "unknown", side: "front") {
+                                            Image(systemName: "speaker.wave.2.fill")
+                                                .foregroundColor(.blue)
+                                                .font(.caption)
+                                        }
+                                        
+                                        if flashcard.needsReview {
+                                            Image(systemName: "exclamationmark.triangle.fill")
+                                                .foregroundColor(.orange)
+                                                .font(.caption)
+                                        }
+                                    }
+                                }
+                                
+                                Divider()
+                                
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("Back")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                        Text(flashcard.backText1 ?? "")
+                                            .font(.body)
+                                            .lineLimit(2)
+                                    }
+                                    
+                                    Spacer()
+                                    
+                                    if FlashAudioManager.shared.hasAudio(flashcardID: flashcard.id?.uuidString ?? "unknown", side: "back") {
+                                        Image(systemName: "speaker.wave.2.fill")
+                                            .foregroundColor(.blue)
+                                            .font(.caption)
+                                    }
+                                }
+                            }
+                            .padding()
+                            .background(Color(.systemGray6))
+                            .cornerRadius(12)
+                        }
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            Button {
+                                flashcardToDelete = flashcard
+                                showingDeleteConfirmation = true
+                            } label: {
+                                Image(systemName: "trash")
+                                    .font(.title2)
+                            }
+                            .tint(.red)
                         }
                     }
-                    .padding(.horizontal)
-                    .padding(.top, 8)
                 }
+                .listStyle(PlainListStyle())
                 
                 VStack(spacing: 12) {
                     if isDeckMastered {
@@ -659,6 +973,22 @@ struct DeckPageView: View {
         .fullScreenCover(isPresented: $showingReviewMode) {
             StudyModeView(deck: deck, reviewMode: true)
         }
+        .alert("Delete Flashcard", isPresented: $showingDeleteConfirmation) {
+            Button("Cancel", role: .cancel) {
+                flashcardToDelete = nil
+            }
+            Button("Delete", role: .destructive) {
+                if let flashcard = flashcardToDelete {
+                    deleteFlashcard(flashcard)
+                }
+                flashcardToDelete = nil
+            }
+        } message: {
+            if let flashcard = flashcardToDelete {
+                let frontText = flashcard.frontText1 ?? "this flashcard"
+                Text("Are you sure you want to delete '\(frontText)'? This action cannot be undone and will also delete any audio recordings for this flashcard.")
+            }
+        }
         .onAppear {
             refreshView()
             startRefreshTimer()
@@ -667,6 +997,24 @@ struct DeckPageView: View {
             stopRefreshTimer()
         }
         .onChange(of: refreshToggle) { _ in }
+    }
+    
+    private func deleteFlashcard(_ flashcard: Flashcard) {
+        // Delete audio and photo files for this flashcard
+        if let flashcardID = flashcard.id?.uuidString {
+            FlashAudioManager.shared.deleteAllAudio(flashcardID: flashcardID)
+            FlashPhotoManager.shared.deleteAllPhotos(flashcardID: flashcardID)
+        }
+        
+        // Delete the flashcard from Core Data
+        viewContext.delete(flashcard)
+        
+        do {
+            try viewContext.save()
+            print("✅ Flashcard deleted successfully")
+        } catch {
+            print("❌ Error deleting flashcard: \(error)")
+        }
     }
     
     private func startRefreshTimer() {
@@ -800,6 +1148,16 @@ struct CreateFlashcardView: View {
                                 .font(.headline.weight(.semibold))
                                 .foregroundStyle(.secondary)
                                 .padding(.horizontal)
+                            
+                            VStack {
+                                FlashcardPhotoView(
+                                    flashcardID: flashcardID,
+                                    side: "front",
+                                    title: "Photo"
+                                )
+                            }
+                            .padding(.horizontal)
+                            
                             VStack(spacing: 8) {
                                 TextField("Front text", text: $frontText1)
                                     .textFieldStyle(.plain)
@@ -832,6 +1190,16 @@ struct CreateFlashcardView: View {
                                 .font(.headline.weight(.semibold))
                                 .foregroundStyle(.secondary)
                                 .padding(.horizontal)
+                            
+                            VStack {
+                                FlashcardPhotoView(
+                                    flashcardID: flashcardID,
+                                    side: "back",
+                                    title: "Photo"
+                                )
+                            }
+                            .padding(.horizontal)
+                            
                             VStack(spacing: 8) {
                                 TextField("Back text", text: $backText1)
                                     .textFieldStyle(.plain)
@@ -864,6 +1232,7 @@ struct CreateFlashcardView: View {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Cancel") {
                         FlashAudioManager.shared.deleteAllAudio(flashcardID: flashcardID)
+                        FlashPhotoManager.shared.deleteAllPhotos(flashcardID: flashcardID)
                         presentationMode.wrappedValue.dismiss()
                     }
                 }
@@ -897,6 +1266,229 @@ struct CreateFlashcardView: View {
         } catch {
             print("❌ Error saving flashcard: \(error)")
             FlashAudioManager.shared.deleteAllAudio(flashcardID: flashcardID)
+            FlashPhotoManager.shared.deleteAllPhotos(flashcardID: flashcardID)
+        }
+    }
+}
+
+// MARK: - Photo View Component
+struct FlashcardPhotoView: View {
+    let flashcardID: String
+    let side: String
+    let title: String
+    
+    @State private var showingPhotoPicker = false
+    @State private var showingCameraPicker = false
+    @State private var showingPhotoSourceSelection = false
+    @State private var showingFileImporter = false
+    @State private var hasPhoto = false
+    
+    var body: some View {
+        HStack {
+            Spacer()
+            
+            Text(title)
+                .font(.subheadline)
+                .fontWeight(.medium)
+            
+            HStack(spacing: 12) {
+                Button(action: {
+                    showingPhotoSourceSelection = true
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: hasPhoto ? "photo.badge.plus" : "photo.circle.fill")
+                            .foregroundColor(.blue)
+                        Text(hasPhoto ? "Change" : "Add Photo")
+                            .font(.caption)
+                            .fixedSize()
+                    }
+                }
+                .buttonStyle(.bordered)
+                .clipShape(.capsule)
+                
+                if hasPhoto {
+                    Button(action: {
+                        deletePhoto()
+                    }) {
+                        Image(systemName: "trash.circle.fill")
+                            .foregroundColor(.red)
+                    }
+                    .buttonStyle(BorderedButtonStyle())
+                }
+            }
+            
+            Spacer()
+        }
+        .confirmationDialog("Choose Photo Source", isPresented: $showingPhotoSourceSelection) {
+            Button("Take Photo") {
+                showingCameraPicker = true
+            }
+            Button("Photo Library") {
+                showingPhotoPicker = true
+            }
+            Button("Browse Files") {
+                showingFileImporter = true
+            }
+            Button("Cancel", role: .cancel) { }
+        }
+        .sheet(isPresented: $showingCameraPicker) {
+            CameraPicker(flashcardID: flashcardID, side: side) {
+                checkPhotoExists()
+            }
+        }
+        .sheet(isPresented: $showingPhotoPicker) {
+            PhotoPicker(flashcardID: flashcardID, side: side) {
+                checkPhotoExists()
+            }
+        }
+        .fileImporter(isPresented: $showingFileImporter, allowedContentTypes: [.image]) { result in
+            switch result {
+            case .success(let url):
+                importPhotoFile(from: url)
+            case .failure(let error):
+                print("Error importing photo file: \(error)")
+            }
+        }
+        .onAppear {
+            checkPhotoExists()
+        }
+    }
+    
+    private func checkPhotoExists() {
+        hasPhoto = FlashPhotoManager.shared.hasPhoto(flashcardID: flashcardID, side: side)
+    }
+    
+    private func deletePhoto() {
+        FlashPhotoManager.shared.deletePhoto(flashcardID: flashcardID, side: side)
+        checkPhotoExists()
+    }
+    
+    private func importPhotoFile(from url: URL) {
+        if FlashPhotoManager.shared.savePhoto(from: url, flashcardID: flashcardID, side: side) {
+            checkPhotoExists()
+        }
+    }
+}
+
+// MARK: - Camera Picker
+struct CameraPicker: UIViewControllerRepresentable {
+    let flashcardID: String
+    let side: String
+    let onPhotoTaken: () -> Void
+    
+    @Environment(\.presentationMode) var presentationMode
+    
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.delegate = context.coordinator
+        picker.sourceType = .camera
+        picker.allowsEditing = true
+        picker.cameraDevice = .rear
+        return picker
+    }
+    
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+    
+    class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        let parent: CameraPicker
+        
+        init(_ parent: CameraPicker) {
+            self.parent = parent
+        }
+        
+        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey : Any]) {
+            
+            if let capturedImage = info[.editedImage] as? UIImage ?? info[.originalImage] as? UIImage {
+                // Save image to temporary location first
+                let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("temp_camera_\(UUID().uuidString).jpg")
+                
+                if let jpegData = capturedImage.jpegData(compressionQuality: 0.8) {
+                    do {
+                        try jpegData.write(to: tempURL)
+                        
+                        // Save using photo manager
+                        if FlashPhotoManager.shared.savePhoto(from: tempURL, flashcardID: parent.flashcardID, side: parent.side) {
+                            parent.onPhotoTaken()
+                        }
+                        
+                        // Clean up temp file
+                        try? FileManager.default.removeItem(at: tempURL)
+                    } catch {
+                        print("Error saving camera image: \(error)")
+                    }
+                }
+            }
+            
+            parent.presentationMode.wrappedValue.dismiss()
+        }
+        
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.presentationMode.wrappedValue.dismiss()
+        }
+    }
+}
+
+// MARK: - Photo Picker
+struct PhotoPicker: UIViewControllerRepresentable {
+    let flashcardID: String
+    let side: String
+    let onPhotoSelected: () -> Void
+    
+    @Environment(\.presentationMode) var presentationMode
+    
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.delegate = context.coordinator
+        picker.sourceType = .photoLibrary
+        picker.allowsEditing = true
+        return picker
+    }
+    
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+    
+    class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        let parent: PhotoPicker
+        
+        init(_ parent: PhotoPicker) {
+            self.parent = parent
+        }
+        
+        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey : Any]) {
+            
+            if let editedImage = info[.editedImage] as? UIImage ?? info[.originalImage] as? UIImage {
+                // Save image to temporary location first
+                let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("temp_photo_\(UUID().uuidString).jpg")
+                
+                if let jpegData = editedImage.jpegData(compressionQuality: 0.8) {
+                    do {
+                        try jpegData.write(to: tempURL)
+                        
+                        // Save using photo manager
+                        if FlashPhotoManager.shared.savePhoto(from: tempURL, flashcardID: parent.flashcardID, side: parent.side) {
+                            parent.onPhotoSelected()
+                        }
+                        
+                        // Clean up temp file
+                        try? FileManager.default.removeItem(at: tempURL)
+                    } catch {
+                        print("Error saving image: \(error)")
+                    }
+                }
+            }
+            
+            parent.presentationMode.wrappedValue.dismiss()
+        }
+        
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.presentationMode.wrappedValue.dismiss()
         }
     }
 }
@@ -916,7 +1508,9 @@ struct UserDefaultsAudioView: View {
     @State private var audioDelegate: AudioPlayerDelegate?
     
     var body: some View {
-        HStack(spacing: 8) {
+        HStack {
+            Spacer()
+            
             Text(title)
                 .font(.subheadline)
                 .fontWeight(.medium)
@@ -967,9 +1561,11 @@ struct UserDefaultsAudioView: View {
                                 .foregroundColor(isPlaying ? .orange : .green)
                             Text(isPlaying ? "Stop" : "Play")
                                 .font(.caption)
+                                .fixedSize()
                         }
                     }
-                    .buttonStyle(BorderedButtonStyle())
+                    .buttonStyle(.bordered)
+                    .clipShape(.capsule)
                     
                     Button(action: {
                         deleteAudio()
@@ -977,16 +1573,12 @@ struct UserDefaultsAudioView: View {
                         Image(systemName: "trash.circle.fill")
                             .foregroundColor(.red)
                     }
-                    .buttonStyle(BorderedButtonStyle())
+                    .buttonStyle(.bordered)
+                    .clipShape(.capsule)
                 }
             }
             
-            if hasAudio {
-                Text("Audio: \(flashcardID)_\(side).m4a")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-            }
+            Spacer()
         }
         .fileImporter(isPresented: $showingAudioPicker, allowedContentTypes: [.audio]) { result in
             switch result {
@@ -1154,6 +1746,10 @@ struct FlashcardDetailView: View {
     @State private var frontText2: String
     @State private var backText1: String
     @State private var backText2: String
+    @State private var refreshToggle = false
+    @State private var refreshTimer: Timer?
+    @State private var frontPhotoImage: UIImage?
+    @State private var backPhotoImage: UIImage?
     
     private var flashcardID: String {
         flashcard.id?.uuidString ?? "unknown"
@@ -1176,44 +1772,80 @@ struct FlashcardDetailView: View {
             
             VStack(spacing: 16) {
                 if isShowingBack {
-                    VStack(spacing: 12) {
-                        TextField("Back text 1", text: $backText1)
-                            .font(.title2)
-                            .multilineTextAlignment(.center)
-                            .textFieldStyle(PlainTextFieldStyle())
-                        
-                        if !backText2.isEmpty {
-                            TextField("Back text 2", text: $backText2)
-                                .font(.body)
-                                .multilineTextAlignment(.center)
-                                .textFieldStyle(PlainTextFieldStyle())
+                    VStack(spacing: 16) {
+                        // Photo at the top (upper half)
+                        if let image = backPhotoImage {
+                            Image(uiImage: image)
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .frame(maxHeight: 200)
+                                .cornerRadius(12)
                         }
                         
-                        UserDefaultsAudioView(
-                            title: "Back Audio",
-                            flashcardID: flashcardID,
-                            side: "back"
-                        )
+                        // Text and audio at the bottom (lower half)
+                        VStack(spacing: 12) {
+                            TextField("Back text 1", text: $backText1)
+                                .font(.title2)
+                                .multilineTextAlignment(.center)
+                                .textFieldStyle(PlainTextFieldStyle())
+                            
+                            if !backText2.isEmpty {
+                                TextField("Back text 2", text: $backText2)
+                                    .font(.body)
+                                    .multilineTextAlignment(.center)
+                                    .textFieldStyle(PlainTextFieldStyle())
+                            }
+                            
+                            FlashcardPhotoView(
+                                flashcardID: flashcardID,
+                                side: "back",
+                                title: "Back Photo"
+                            )
+                            
+                            UserDefaultsAudioView(
+                                title: "Back Audio",
+                                flashcardID: flashcardID,
+                                side: "back"
+                            )
+                        }
                     }
                 } else {
-                    VStack(spacing: 12) {
-                        TextField("Front text 1", text: $frontText1)
-                            .font(.title2)
-                            .multilineTextAlignment(.center)
-                            .textFieldStyle(PlainTextFieldStyle())
-                        
-                        if !frontText2.isEmpty {
-                            TextField("Front text 2", text: $frontText2)
-                                .font(.body)
-                                .multilineTextAlignment(.center)
-                                .textFieldStyle(PlainTextFieldStyle())
+                    VStack(spacing: 16) {
+                        // Photo at the top (upper half)
+                        if let image = frontPhotoImage {
+                            Image(uiImage: image)
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .frame(maxHeight: 200)
+                                .cornerRadius(12)
                         }
                         
-                        UserDefaultsAudioView(
-                            title: "Front Audio",
-                            flashcardID: flashcardID,
-                            side: "front"
-                        )
+                        // Text and audio at the bottom (lower half)
+                        VStack(spacing: 12) {
+                            TextField("Front text 1", text: $frontText1)
+                                .font(.title2)
+                                .multilineTextAlignment(.center)
+                                .textFieldStyle(PlainTextFieldStyle())
+                            
+                            if !frontText2.isEmpty {
+                                TextField("Front text 2", text: $frontText2)
+                                    .font(.body)
+                                    .multilineTextAlignment(.center)
+                                    .textFieldStyle(PlainTextFieldStyle())
+                            }
+                            
+                            FlashcardPhotoView(
+                                flashcardID: flashcardID,
+                                side: "front",
+                                title: "Front Photo"
+                            )
+                            
+                            UserDefaultsAudioView(
+                                title: "Front Audio",
+                                flashcardID: flashcardID,
+                                side: "front"
+                            )
+                        }
                     }
                 }
             }
@@ -1244,8 +1876,16 @@ struct FlashcardDetailView: View {
                 }
             }
         }
+        .onAppear {
+            startRefreshTimer()
+            refreshPhotos()
+        }
         .onDisappear {
+            stopRefreshTimer()
             saveChanges()
+        }
+        .onChange(of: refreshToggle) { _ in
+            refreshPhotos()
         }
     }
     
@@ -1260,6 +1900,36 @@ struct FlashcardDetailView: View {
             print("✅ Flashcard text saved")
         } catch {
             print("❌ Error saving flashcard: \(error)")
+        }
+    }
+    
+    private func startRefreshTimer() {
+        stopRefreshTimer()
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
+            refreshToggle.toggle()
+        }
+    }
+    
+    private func stopRefreshTimer() {
+        refreshTimer?.invalidate()
+        refreshTimer = nil
+    }
+    
+    private func refreshPhotos() {
+        // Check and load front photo
+        if FlashPhotoManager.shared.hasPhoto(flashcardID: flashcardID, side: "front"),
+           let frontPath = FlashPhotoManager.shared.getPhotoPath(flashcardID: flashcardID, side: "front") {
+            frontPhotoImage = UIImage(contentsOfFile: frontPath)
+        } else {
+            frontPhotoImage = nil
+        }
+        
+        // Check and load back photo
+        if FlashPhotoManager.shared.hasPhoto(flashcardID: flashcardID, side: "back"),
+           let backPath = FlashPhotoManager.shared.getPhotoPath(flashcardID: flashcardID, side: "back") {
+            backPhotoImage = UIImage(contentsOfFile: backPath)
+        } else {
+            backPhotoImage = nil
         }
     }
 }
@@ -1320,30 +1990,58 @@ struct StudyModeView: View {
                         
                         VStack(spacing: 12) {
                             if isShowingBack {
-                                Text(currentCard.backText1 ?? "")
-                                    .font(.title2)
-                                    .multilineTextAlignment(.center)
-                                if let backText2 = currentCard.backText2, !backText2.isEmpty {
-                                    Text(backText2)
-                                        .font(.body)
-                                        .multilineTextAlignment(.center)
+                                // Photo at the top (upper half)
+                                if FlashPhotoManager.shared.hasPhoto(flashcardID: currentCardID, side: "back"),
+                                   let photoPath = FlashPhotoManager.shared.getPhotoPath(flashcardID: currentCardID, side: "back"),
+                                   let image = UIImage(contentsOfFile: photoPath) {
+                                    Image(uiImage: image)
+                                        .resizable()
+                                        .aspectRatio(contentMode: .fit)
+                                        .frame(maxHeight: 200)
+                                        .cornerRadius(12)
                                 }
                                 
-                                if FlashAudioManager.shared.hasAudio(flashcardID: currentCardID, side: "back") {
-                                    StudyAudioPlayer(flashcardID: currentCardID, side: "back", label: "🔊 Back Audio")
+                                // Text and audio at the bottom (lower half)
+                                VStack(spacing: 8) {
+                                    Text(currentCard.backText1 ?? "")
+                                        .font(.title2)
+                                        .multilineTextAlignment(.center)
+                                    if let backText2 = currentCard.backText2, !backText2.isEmpty {
+                                        Text(backText2)
+                                            .font(.body)
+                                            .multilineTextAlignment(.center)
+                                    }
+                                    
+                                    if FlashAudioManager.shared.hasAudio(flashcardID: currentCardID, side: "back") {
+                                        StudyAudioPlayer(flashcardID: currentCardID, side: "back", label: "🔊 Back Audio")
+                                    }
                                 }
                             } else {
-                                Text(currentCard.frontText1 ?? "")
-                                    .font(.title2)
-                                    .multilineTextAlignment(.center)
-                                if let frontText2 = currentCard.frontText2, !frontText2.isEmpty {
-                                    Text(frontText2)
-                                        .font(.body)
-                                        .multilineTextAlignment(.center)
+                                // Photo at the top (upper half)
+                                if FlashPhotoManager.shared.hasPhoto(flashcardID: currentCardID, side: "front"),
+                                   let photoPath = FlashPhotoManager.shared.getPhotoPath(flashcardID: currentCardID, side: "front"),
+                                   let image = UIImage(contentsOfFile: photoPath) {
+                                    Image(uiImage: image)
+                                        .resizable()
+                                        .aspectRatio(contentMode: .fit)
+                                        .frame(maxHeight: 200)
+                                        .cornerRadius(12)
                                 }
                                 
-                                if FlashAudioManager.shared.hasAudio(flashcardID: currentCardID, side: "front") {
-                                    StudyAudioPlayer(flashcardID: currentCardID, side: "front", label: "🔊 Front Audio")
+                                // Text and audio at the bottom (lower half)
+                                VStack(spacing: 8) {
+                                    Text(currentCard.frontText1 ?? "")
+                                        .font(.title2)
+                                        .multilineTextAlignment(.center)
+                                    if let frontText2 = currentCard.frontText2, !frontText2.isEmpty {
+                                        Text(frontText2)
+                                            .font(.body)
+                                            .multilineTextAlignment(.center)
+                                    }
+                                    
+                                    if FlashAudioManager.shared.hasAudio(flashcardID: currentCardID, side: "front") {
+                                        StudyAudioPlayer(flashcardID: currentCardID, side: "front", label: "🔊 Front Audio")
+                                    }
                                 }
                             }
                         }
