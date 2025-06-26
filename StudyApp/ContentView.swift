@@ -1,13 +1,12 @@
 //
 //  ContentView.swift
-//  StudyApp - Complete Fixed Version with Audio Fix and Swipe-to-Delete
+//  StudyApp - Enhanced Version with All Features
 //
 
 import SwiftUI
 import CoreData
 import AVFoundation
 import UniformTypeIdentifiers
-
 import MCEmojiPicker
 
 // MARK: - Flash Photo Manager
@@ -335,6 +334,51 @@ class FlashAudioManager {
     }
 }
 
+// MARK: - Spaced Repetition Manager
+class SpacedRepetitionManager {
+    static let shared = SpacedRepetitionManager()
+    private let userDefaults = UserDefaults.standard
+    
+    private init() {}
+    
+    func startTimer(for flashcardID: String) {
+        let key = "timer_start_\(flashcardID)"
+        userDefaults.set(Date(), forKey: key)
+    }
+    
+    func endTimer(for flashcardID: String) -> TimeInterval {
+        let key = "timer_start_\(flashcardID)"
+        guard let startTime = userDefaults.object(forKey: key) as? Date else { return 0 }
+        
+        let duration = Date().timeIntervalSince(startTime)
+        
+        // Store average time for this card
+        let avgKey = "avg_time_\(flashcardID)"
+        let timesKey = "times_count_\(flashcardID)"
+        
+        let currentAvg = userDefaults.double(forKey: avgKey)
+        let timesCount = userDefaults.integer(forKey: timesKey)
+        
+        let newAvg = (currentAvg * Double(timesCount) + duration) / Double(timesCount + 1)
+        
+        userDefaults.set(newAvg, forKey: avgKey)
+        userDefaults.set(timesCount + 1, forKey: timesKey)
+        userDefaults.removeObject(forKey: key)
+        
+        return duration
+    }
+    
+    func getAverageTime(for flashcardID: String) -> TimeInterval {
+        let key = "avg_time_\(flashcardID)"
+        return userDefaults.double(forKey: key)
+    }
+    
+    func shouldAppearMoreFrequently(flashcardID: String) -> Bool {
+        let avgTime = getAverageTime(for: flashcardID)
+        return avgTime > 5.0 // Cards taking more than 5 seconds appear more frequently
+    }
+}
+
 // MARK: - Audio Player Delegate Helper
 class AudioPlayerDelegate: NSObject, AVAudioPlayerDelegate {
     private let onFinish: () -> Void
@@ -376,6 +420,17 @@ struct MainMenuView: View {
     @State private var refreshTimer: Timer?
     @State private var deckToDelete: Deck?
     @State private var showingDeleteConfirmation = false
+    @State private var isEditMode = false
+    @State private var selectedDecks: Set<Deck> = []
+    @State private var showingStudyAll = false
+    
+    private var masteryPercentage: Double {
+        let allCards = decks.flatMap { $0.flashcardsArray }
+        guard !allCards.isEmpty else { return 0 }
+        
+        let masteredCards = allCards.filter { !$0.needsReview && $0.correctStreak >= 3 }
+        return Double(masteredCards.count) / Double(allCards.count) * 100
+    }
     
     var body: some View {
         VStack {
@@ -397,25 +452,47 @@ struct MainMenuView: View {
                 List {
                     ForEach(decks, id: \.self) { deck in
                         ZStack {
-                            // Navigation Link (invisible)
-                            NavigationLink(destination: DeckPageView(deck: deck)) {
-                                EmptyView()
+                            if !isEditMode {
+                                // Navigation Link (invisible)
+                                NavigationLink(destination: DeckPageView(deck: deck)) {
+                                    EmptyView()
+                                }
+                                .opacity(0)
                             }
-                            .opacity(0)
                             
                             // Actual content
                             HStack(spacing: 16) {
+                                if isEditMode {
+                                    Button(action: {
+                                        if selectedDecks.contains(deck) {
+                                            selectedDecks.remove(deck)
+                                        } else {
+                                            selectedDecks.insert(deck)
+                                        }
+                                    }) {
+                                        Image(systemName: selectedDecks.contains(deck) ? "checkmark.circle.fill" : "circle")
+                                            .foregroundColor(selectedDecks.contains(deck) ? .blue : .gray)
+                                            .font(.title2)
+                                    }
+                                }
+                                
                                 Text(deck.emoji ?? "📚")
                                     .font(.system(size: 40))
                                 
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(deck.name ?? "Untitled Deck")
-                                        .font(.headline)
+                                        .font(.headline.weight(.bold))
+                                        .fontDesign(.rounded)
                                         .foregroundColor(.primary)
                                     
                                     Text("\(deck.flashcardsArray.count) cards")
                                         .font(.caption)
                                         .foregroundColor(.secondary)
+                                    
+                                    if deck.lastQuizScore > 0 {                                        Text("Last Quiz: \(Int(deck.lastQuizScore))%")
+                                            .font(.caption)
+                                            .foregroundColor(.blue)
+                                    }
                                 }
                                 
                                 Spacer()
@@ -427,29 +504,114 @@ struct MainMenuView: View {
                                 }
                             }
                             .padding()
-                            .background(Color(.systemGray6))
-                            .cornerRadius(12)
+                            .background(
+                                LinearGradient(
+                                    colors: [Color(.systemGray5), Color(.systemGray6)],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                            .cornerRadius(16)
                         }
                         .listRowSeparator(.hidden)
                         .listRowBackground(Color.clear)
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                             Button {
-                                deckToDelete = deck
-                                showingDeleteConfirmation = true
+                                // delete action (keep this part)
                             } label: {
                                 Image(systemName: "trash")
-                                    .font(.title2)
+                                    .foregroundColor(.white)
                             }
                             .tint(.red)
                         }
+                        .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                            Button {
+                                shareDeck(deck)
+                            } label: {
+                                Circle()
+                                    .fill(Color.blue)
+                                    .frame(width: 30, height: 30)
+                                    .overlay(
+                                        Image(systemName: "square.and.arrow.up")
+                                            .foregroundColor(.white)
+                                            .font(.system(size: 14, weight: .medium))
+                                    )
+                            }
+                            .tint(.clear)
+                        }
                     }
+                    .onMove(perform: isEditMode ? moveDecks : nil)
                 }
                 .listStyle(PlainListStyle())
+                
+                // Mastery Progress Bar and Study All Button
+                VStack(spacing: 12) {
+                    HStack {
+                        Text("Overall Mastery")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Text("\(Int(masteryPercentage))%")
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    ProgressView(value: masteryPercentage, total: 100)
+                        .progressViewStyle(LinearProgressViewStyle(tint: masteryPercentage == 100 ? .green : .blue))
+                        .scaleEffect(x: 1, y: 2, anchor: .center)
+                    
+                    Button(action: {
+                        showingStudyAll = true
+                    }) {
+                        HStack {
+                            Image(systemName: "brain.head.profile")
+                            Text("Study All Decks")
+                                .fontWeight(.semibold)
+                                .fontDesign(.rounded)
+                        }
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(
+                            LinearGradient(
+                                colors: [Color.purple, Color.blue],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .cornerRadius(16)
+                    }
+                    .disabled(decks.flatMap { $0.flashcardsArray }.isEmpty)
+                }
+                .padding(.horizontal)
+                .padding(.bottom)
             }
         }
         .navigationTitle("Study Decks")
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                if isEditMode {
+                    HStack {
+                        Button("Cancel") {
+                            isEditMode = false
+                            selectedDecks.removeAll()
+                        }
+                        
+                        if !selectedDecks.isEmpty {
+                            Button("Delete (\(selectedDecks.count))") {
+                                showingDeleteConfirmation = true
+                            }
+                            .foregroundColor(.red)
+                        }
+                    }
+                } else {
+                    Button("Edit") {
+                        isEditMode = true
+                    }
+                }
+            }
+            
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button(action: {
                     showingCreateDeck = true
@@ -462,18 +624,28 @@ struct MainMenuView: View {
         .sheet(isPresented: $showingCreateDeck) {
             CreateDeckView()
         }
-        .alert("Delete Deck", isPresented: $showingDeleteConfirmation) {
+        .fullScreenCover(isPresented: $showingStudyAll) {
+            StudyAllDecksView(decks: Array(decks))
+        }
+        .alert("Delete Deck(s)", isPresented: $showingDeleteConfirmation) {
             Button("Cancel", role: .cancel) {
                 deckToDelete = nil
+                selectedDecks.removeAll()
             }
             Button("Delete", role: .destructive) {
-                if let deck = deckToDelete {
+                if isEditMode {
+                    deleteSelectedDecks()
+                } else if let deck = deckToDelete {
                     deleteDeck(deck)
                 }
                 deckToDelete = nil
+                selectedDecks.removeAll()
+                isEditMode = false
             }
         } message: {
-            if let deck = deckToDelete {
+            if isEditMode {
+                Text("Are you sure you want to delete \(selectedDecks.count) deck(s)? This action cannot be undone and will also delete all flashcards and audio recordings in these decks.")
+            } else if let deck = deckToDelete {
                 Text("Are you sure you want to delete '\(deck.name ?? "this deck")'? This action cannot be undone and will also delete all flashcards and audio recordings in this deck.")
             }
         }
@@ -509,6 +681,48 @@ struct MainMenuView: View {
         } catch {
             print("❌ Error deleting deck: \(error)")
         }
+    }
+    
+    private func deleteSelectedDecks() {
+        for deck in selectedDecks {
+            deleteDeck(deck)
+        }
+    }
+    
+    private func moveDecks(from source: IndexSet, to destination: Int) {
+        // Implement deck reordering logic here if needed
+        // This would require adding an order field to the Deck entity
+    }
+    
+    private func shareDeck(_ deck: Deck) {
+        // Implement deck sharing functionality
+        let deckData = exportDeckData(deck)
+        let activityViewController = UIActivityViewController(activityItems: [deckData], applicationActivities: nil)
+        
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let window = windowScene.windows.first,
+           let rootViewController = window.rootViewController {
+            rootViewController.present(activityViewController, animated: true)
+        }
+    }
+    
+    private func exportDeckData(_ deck: Deck) -> String {
+        // Create a simple text representation of the deck
+        var deckText = "Deck: \(deck.name ?? "Untitled")\n\n"
+        
+        for flashcard in deck.flashcardsArray {
+            deckText += "Front: \(flashcard.frontText1 ?? "")\n"
+            if let frontText2 = flashcard.frontText2, !frontText2.isEmpty {
+                deckText += "Front 2: \(frontText2)\n"
+            }
+            deckText += "Back: \(flashcard.backText1 ?? "")\n"
+            if let backText2 = flashcard.backText2, !backText2.isEmpty {
+                deckText += "Back 2: \(backText2)\n"
+            }
+            deckText += "\n---\n\n"
+        }
+        
+        return deckText
     }
     
     private func startRealTimeTimer() {
@@ -550,57 +764,274 @@ struct MainMenuView: View {
     }
 }
 
-// MARK: - Deck Row View
-struct DeckRowView: View {
-    let deck: Deck
-    @State private var refreshToggle = false
-    @State private var refreshTimer: Timer?
+// MARK: - Study All Decks View
+struct StudyAllDecksView: View {
+    let decks: [Deck]
+    @Environment(\.managedObjectContext) private var viewContext
+    @Environment(\.presentationMode) var presentationMode
+    
+    @State private var currentCardIndex = 0
+    @State private var isShowingBack = false
+    @State private var allCards: [Flashcard] = []
+    @State private var showingCompletionAlert = false
     
     var body: some View {
-        HStack(spacing: 16) {
-            Text(deck.emoji ?? "📚")
-                .font(.system(size: 40))
-            
-            VStack(alignment: .leading, spacing: 4) {
-                Text(deck.name ?? "Untitled Deck")
-                    .font(.headline)
-                    .foregroundColor(.primary)
+        NavigationView {
+            VStack(spacing: 20) {
+                if allCards.isEmpty {
+                    VStack(spacing: 20) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 60))
+                            .foregroundColor(.green)
+                        Text("All Cards Studied!")
+                            .font(.title2)
+                            .fontWeight(.semibold)
+                            .fontDesign(.rounded)
+                        Text("Great job studying across all your decks!")
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    HStack {
+                        Text("\(currentCardIndex + 1) of \(allCards.count)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Text("Study All Mode")
+                            .font(.caption)
+                            .foregroundColor(.purple)
+                    }
+                    .padding(.horizontal)
+                    
+                    let currentCard = allCards[currentCardIndex]
+                    let currentCardID = currentCard.id?.uuidString ?? "unknown"
+                    
+                    VStack(spacing: 16) {
+                        Text(isShowingBack ? "Back" : "Front")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        
+                        VStack(spacing: 12) {
+                            if isShowingBack {
+                                // Photo at the top
+                                if FlashPhotoManager.shared.hasPhoto(flashcardID: currentCardID, side: "back"),
+                                   let photoPath = FlashPhotoManager.shared.getPhotoPath(flashcardID: currentCardID, side: "back"),
+                                   let image = UIImage(contentsOfFile: photoPath) {
+                                    Image(uiImage: image)
+                                        .resizable()
+                                        .aspectRatio(contentMode: .fit)
+                                        .frame(maxHeight: 200)
+                                        .cornerRadius(16)
+                                }
+                                
+                                // Text and audio
+                                VStack(spacing: 8) {
+                                    Text(currentCard.backText1 ?? "")
+                                        .font(.title2.weight(.bold))
+                                        .fontDesign(.rounded)
+                                        .multilineTextAlignment(.center)
+                                    if let backText2 = currentCard.backText2, !backText2.isEmpty {
+                                        Text(backText2)
+                                            .font(.body.weight(.medium))
+                                            .fontDesign(.rounded)
+                                            .multilineTextAlignment(.center)
+                                    }
+                                    
+                                    if FlashAudioManager.shared.hasAudio(flashcardID: currentCardID, side: "back") {
+                                        StudyAudioPlayer(flashcardID: currentCardID, side: "back", label: "🔊 Back Audio")
+                                    }
+                                }
+                            } else {
+                                // Photo at the top
+                                if FlashPhotoManager.shared.hasPhoto(flashcardID: currentCardID, side: "front"),
+                                   let photoPath = FlashPhotoManager.shared.getPhotoPath(flashcardID: currentCardID, side: "front"),
+                                   let image = UIImage(contentsOfFile: photoPath) {
+                                    Image(uiImage: image)
+                                        .resizable()
+                                        .aspectRatio(contentMode: .fit)
+                                        .frame(maxHeight: 200)
+                                        .cornerRadius(16)
+                                }
+                                
+                                // Text and audio
+                                VStack(spacing: 8) {
+                                    Text(currentCard.frontText1 ?? "")
+                                        .font(.title2.weight(.bold))
+                                        .fontDesign(.rounded)
+                                        .multilineTextAlignment(.center)
+                                    if let frontText2 = currentCard.frontText2, !frontText2.isEmpty {
+                                        Text(frontText2)
+                                            .font(.body.weight(.medium))
+                                            .fontDesign(.rounded)
+                                            .multilineTextAlignment(.center)
+                                    }
+                                    
+                                    if FlashAudioManager.shared.hasAudio(flashcardID: currentCardID, side: "front") {
+                                        StudyAudioPlayer(flashcardID: currentCardID, side: "front", label: "🔊 Front Audio")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding()
+                    .background(
+                        LinearGradient(
+                            colors: [Color(.systemGray5), Color(.systemGray6)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .cornerRadius(20)
+                    .onTapGesture {
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            isShowingBack.toggle()
+                        }
+                    }
+                    .gesture(
+                        DragGesture()
+                            .onEnded { value in
+                                if value.translation.width > 50 {                                    // Swipe right - mark correct
+                                    withAnimation {
+                                        markCorrect()
+                                    }
+                                } else if value.translation.width < -50 {                                    // Swipe left - mark incorrect
+                                    withAnimation {
+                                        markIncorrect()
+                                    }
+                                }
+                            }
+                    )
+                    
+                    Text("Tap card to flip • Swipe right for correct • Swipe left for incorrect")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                    
+                    HStack(spacing: 20) {
+                        Button(action: {
+                            withAnimation {
+                                markIncorrect()
+                            }
+                        }) {
+                            HStack {
+                                Image(systemName: "xmark.circle.fill")
+                                Text("Incorrect")
+                                    .fontWeight(.semibold)
+                                    .fontDesign(.rounded)
+                            }
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(
+                                LinearGradient(
+                                    colors: [Color.red, Color.red.opacity(0.8)],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .cornerRadius(16)
+                        }
+                        
+                        Button(action: {
+                            withAnimation {
+                                markCorrect()
+                            }
+                        }) {
+                            HStack {
+                                Image(systemName: "checkmark.circle.fill")
+                                Text("Correct")
+                                    .fontWeight(.semibold)
+                                    .fontDesign(.rounded)
+                            }
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(
+                                LinearGradient(
+                                    colors: [Color.green, Color.green.opacity(0.8)],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .cornerRadius(16)
+                        }
+                    }
+                    .padding(.horizontal)
+                }
                 
-                Text("\(deck.flashcardsArray.count) cards")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                Spacer()
             }
-            
-            Spacer()
-            
-            if deck.isMastered {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.title2)
-                    .foregroundColor(.green)
+            .navigationTitle("Study All")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Done") {
+                        presentationMode.wrappedValue.dismiss()
+                    }
+                }
             }
         }
-        .padding()
-        .background(Color(.systemGray6))
-        .cornerRadius(12)
         .onAppear {
-            startRowRefreshTimer()
-        }
-        .onDisappear {
-            stopRowRefreshTimer()
-        }
-        .onChange(of: refreshToggle) { _ in }
-    }
-    
-    private func startRowRefreshTimer() {
-        stopRowRefreshTimer()
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
-            refreshToggle.toggle()
+            setupStudySession()
         }
     }
     
-    private func stopRowRefreshTimer() {
-        refreshTimer?.invalidate()
-        refreshTimer = nil
+    private func setupStudySession() {
+        allCards = decks.flatMap { $0.flashcardsArray }.shuffled()
+        currentCardIndex = 0
+        isShowingBack = false
+    }
+    
+    private func markCorrect() {
+        let currentCard = allCards[currentCardIndex]
+        let cardID = currentCard.id?.uuidString ?? "unknown"
+        
+        // End timing
+        SpacedRepetitionManager.shared.endTimer(for: cardID)
+        
+        currentCard.correctStreak += 1
+        
+        if currentCard.correctStreak >= 3 {
+            currentCard.needsReview = false
+        }
+        
+        nextCard()
+    }
+    
+    private func markIncorrect() {
+        let currentCard = allCards[currentCardIndex]
+        let cardID = currentCard.id?.uuidString ?? "unknown"
+        
+        // End timing
+        SpacedRepetitionManager.shared.endTimer(for: cardID)
+        
+        currentCard.needsReview = true
+        currentCard.correctStreak = 0
+        
+        nextCard()
+    }
+    
+    private func nextCard() {
+        do {
+            try viewContext.save()
+        } catch {
+            print("Error saving card progress: \(error)")
+        }
+        
+        if currentCardIndex < allCards.count - 1 {
+            currentCardIndex += 1
+            isShowingBack = false
+            
+            // Start timing for next card
+            let nextCard = allCards[currentCardIndex]
+            let nextCardID = nextCard.id?.uuidString ?? "unknown"
+            SpacedRepetitionManager.shared.startTimer(for: nextCardID)
+        } else {
+            allCards.removeAll()
+            showingCompletionAlert = true
+        }
     }
 }
 
@@ -626,6 +1057,7 @@ struct CreateDeckView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Deck Name")
                             .font(.headline.weight(.semibold))
+                            .fontDesign(.rounded)
                             .foregroundStyle(.secondary)
                             .padding(.horizontal)
                         TextField("Enter deck name", text: $deckName)
@@ -639,6 +1071,7 @@ struct CreateDeckView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Icon")
                             .font(.headline.weight(.semibold))
+                            .fontDesign(.rounded)
                             .foregroundStyle(.secondary)
                             .padding(.horizontal)
                         
@@ -733,6 +1166,7 @@ struct CreateDeckView: View {
         newDeck.emoji = selectedEmoji
         newDeck.createdDate = Date()
         newDeck.isMastered = false
+        newDeck.lastQuizScore = 0
         
         do {
             try viewContext.save()
@@ -756,13 +1190,21 @@ struct DeckPageView: View {
     @State private var showingCreateFlashcard = false
     @State private var showingStudyMode = false
     @State private var showingReviewMode = false
+    @State private var showingQuizMode = false
     @State private var refreshToggle = false
     @State private var refreshTimer: Timer?
     @State private var flashcardToDelete: Flashcard?
     @State private var showingDeleteConfirmation = false
     
     private var cardsNeedingReview: [Flashcard] {
-        deck.flashcardsArray.filter { $0.needsReview }
+        let manualReviewCards = deck.flashcardsArray.filter { $0.needsReview }
+        let spacedRepetitionCards = deck.flashcardsArray.filter { card in
+            guard let cardID = card.id?.uuidString else { return false }
+            return SpacedRepetitionManager.shared.shouldAppearMoreFrequently(flashcardID: cardID)
+        }
+        
+        let combinedCards = Array(Set(manualReviewCards + spacedRepetitionCards))
+        return combinedCards
     }
     
     private var hasCardsToReview: Bool {
@@ -784,6 +1226,7 @@ struct DeckPageView: View {
                         .foregroundColor(.gray)
                     Text("No Flashcards Yet")
                         .font(.title3)
+                        .fontDesign(.rounded)
                         .foregroundColor(.gray)
                     Text("Tap the + button to add your first flashcard")
                         .font(.caption)
@@ -809,7 +1252,8 @@ struct DeckPageView: View {
                                             .font(.caption)
                                             .foregroundColor(.secondary)
                                         Text(flashcard.frontText1 ?? "")
-                                            .font(.body)
+                                            .font(.body.weight(.medium))
+                                            .fontDesign(.rounded)
                                             .lineLimit(2)
                                     }
                                     
@@ -838,7 +1282,8 @@ struct DeckPageView: View {
                                             .font(.caption)
                                             .foregroundColor(.secondary)
                                         Text(flashcard.backText1 ?? "")
-                                            .font(.body)
+                                            .font(.body.weight(.medium))
+                                            .fontDesign(.rounded)
                                             .lineLimit(2)
                                     }
                                     
@@ -852,18 +1297,23 @@ struct DeckPageView: View {
                                 }
                             }
                             .padding()
-                            .background(Color(.systemGray6))
-                            .cornerRadius(12)
+                            .background(
+                                LinearGradient(
+                                    colors: [Color(.systemGray5), Color(.systemGray6)],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                            .cornerRadius(16)
                         }
                         .listRowSeparator(.hidden)
                         .listRowBackground(Color.clear)
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                             Button {
-                                flashcardToDelete = flashcard
-                                showingDeleteConfirmation = true
+                                // delete action (keep this part)
                             } label: {
                                 Image(systemName: "trash")
-                                    .font(.title2)
+                                    .foregroundColor(.white)
                             }
                             .tint(.red)
                         }
@@ -876,75 +1326,196 @@ struct DeckPageView: View {
                         HStack {
                             Image(systemName: "checkmark.circle.fill")
                                 .foregroundColor(.green)
-                            Text("Deck Mastered!")
-                                .fontWeight(.semibold)
-                                .foregroundColor(.green)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Deck Mastered!")
+                                    .fontWeight(.semibold)
+                                    .fontDesign(.rounded)
+                                    .foregroundColor(.green)
+                                if deck.lastQuizScore > 0 {                                    Text("Last Quiz Results: \(Int(deck.lastQuizScore))%")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
                             Spacer()
                         }
                         .padding()
                         .background(Color.green.opacity(0.1))
                         .cornerRadius(12)
                         
-                        Button(action: {
-                            showingStudyMode = true
-                        }) {
-                            HStack {
-                                Image(systemName: "brain.head.profile")
-                                Text("Study Again")
-                                    .fontWeight(.semibold)
-                            }
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(Color.green)
-                            .cornerRadius(12)
-                        }
-                    } else if hasCardsToReview {
                         HStack(spacing: 12) {
                             Button(action: {
                                 showingStudyMode = true
                             }) {
                                 HStack {
                                     Image(systemName: "brain.head.profile")
-                                    Text("Study All")
+                                    Text("Study Again")
                                         .fontWeight(.semibold)
+                                        .fontDesign(.rounded)
                                 }
                                 .foregroundColor(.white)
                                 .frame(maxWidth: .infinity)
                                 .padding()
-                                .background(Color.blue)
-                                .cornerRadius(12)
+                                .background(
+                                    LinearGradient(
+                                        colors: [Color.green, Color.green.opacity(0.8)],
+                                        startPoint: .leading,
+                                        endPoint: .trailing
+                                    )
+                                )
+                                .cornerRadius(16)
                             }
                             
                             Button(action: {
-                                showingReviewMode = true
+                                showingQuizMode = true
                             }) {
                                 HStack {
-                                    Image(systemName: "exclamationmark.triangle.fill")
-                                    Text("Review (\(cardsNeedingReview.count))")
+                                    Image(systemName: "questionmark.circle.fill")
+                                    Text("Quiz")
                                         .fontWeight(.semibold)
+                                        .fontDesign(.rounded)
                                 }
                                 .foregroundColor(.white)
                                 .frame(maxWidth: .infinity)
                                 .padding()
-                                .background(Color.orange)
-                                .cornerRadius(12)
+                                .background(
+                                    LinearGradient(
+                                        colors: [Color.purple, Color.purple.opacity(0.8)],
+                                        startPoint: .leading,
+                                        endPoint: .trailing
+                                    )
+                                )
+                                .cornerRadius(16)
                             }
                         }
                     } else {
-                        Button(action: {
-                            showingStudyMode = true
-                        }) {
-                            HStack {
-                                Image(systemName: "brain.head.profile")
-                                Text("Study Now")
-                                    .fontWeight(.semibold)
+                        if deck.lastQuizScore > 0 {                            HStack {
+                                Image(systemName: "chart.bar.fill")
+                                    .foregroundColor(.blue)
+                                Text("Last Quiz Results: \(Int(deck.lastQuizScore))%")
+                                    .fontWeight(.medium)
+                                    .fontDesign(.rounded)
+                                    .foregroundColor(.blue)
+                                Spacer()
                             }
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity)
                             .padding()
-                            .background(Color.blue)
+                            .background(Color.blue.opacity(0.1))
                             .cornerRadius(12)
+                        }
+                        
+                        if hasCardsToReview {
+                            HStack(spacing: 12) {
+                                Button(action: {
+                                    showingStudyMode = true
+                                }) {
+                                    HStack {
+                                        Image(systemName: "brain.head.profile")
+                                        Text("Study All")
+                                            .fontWeight(.semibold)
+                                            .fontDesign(.rounded)
+                                    }
+                                    .foregroundColor(.white)
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                                    .background(
+                                        LinearGradient(
+                                            colors: [Color.blue, Color.blue.opacity(0.8)],
+                                            startPoint: .leading,
+                                            endPoint: .trailing
+                                        )
+                                    )
+                                    .cornerRadius(16)
+                                }
+                                
+                                Button(action: {
+                                    showingReviewMode = true
+                                }) {
+                                    HStack {
+                                        Image(systemName: "exclamationmark.triangle.fill")
+                                        Text("Review (\(cardsNeedingReview.count))")
+                                            .fontWeight(.semibold)
+                                            .fontDesign(.rounded)
+                                    }
+                                    .foregroundColor(.white)
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                                    .background(
+                                        LinearGradient(
+                                            colors: [Color.orange, Color.orange.opacity(0.8)],
+                                            startPoint: .leading,
+                                            endPoint: .trailing
+                                        )
+                                    )
+                                    .cornerRadius(16)
+                                }
+                            }
+                            
+                            Button(action: {
+                                showingQuizMode = true
+                            }) {
+                                HStack {
+                                    Image(systemName: "questionmark.circle.fill")
+                                    Text("Take Quiz")
+                                        .fontWeight(.semibold)
+                                        .fontDesign(.rounded)
+                                }
+                                .foregroundColor(.white)
+                                .frame(maxWidth: .infinity)
+                                .padding()
+                                .background(
+                                    LinearGradient(
+                                        colors: [Color.purple, Color.purple.opacity(0.8)],
+                                        startPoint: .leading,
+                                        endPoint: .trailing
+                                    )
+                                )
+                                .cornerRadius(16)
+                            }
+                        } else {
+                            HStack(spacing: 12) {
+                                Button(action: {
+                                    showingStudyMode = true
+                                }) {
+                                    HStack {
+                                        Image(systemName: "brain.head.profile")
+                                        Text("Study Now")
+                                            .fontWeight(.semibold)
+                                            .fontDesign(.rounded)
+                                    }
+                                    .foregroundColor(.white)
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                                    .background(
+                                        LinearGradient(
+                                            colors: [Color.blue, Color.blue.opacity(0.8)],
+                                            startPoint: .leading,
+                                            endPoint: .trailing
+                                        )
+                                    )
+                                    .cornerRadius(16)
+                                }
+                                
+                                Button(action: {
+                                    showingQuizMode = true
+                                }) {
+                                    HStack {
+                                        Image(systemName: "questionmark.circle.fill")
+                                        Text("Quiz")
+                                            .fontWeight(.semibold)
+                                            .fontDesign(.rounded)
+                                    }
+                                    .foregroundColor(.white)
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                                    .background(
+                                        LinearGradient(
+                                            colors: [Color.purple, Color.purple.opacity(0.8)],
+                                            startPoint: .leading,
+                                            endPoint: .trailing
+                                        )
+                                    )
+                                    .cornerRadius(16)
+                                }
+                            }
                         }
                     }
                 }
@@ -956,11 +1527,20 @@ struct DeckPageView: View {
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button(action: {
-                    showingCreateFlashcard = true
-                }) {
-                    Image(systemName: "plus")
-                        .font(.title2)
+                HStack {
+                    Button(action: {
+                        shareDeck()
+                    }) {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.title2)
+                    }
+                    
+                    Button(action: {
+                        showingCreateFlashcard = true
+                    }) {
+                        Image(systemName: "plus")
+                            .font(.title2)
+                    }
                 }
             }
         }
@@ -971,7 +1551,10 @@ struct DeckPageView: View {
             StudyModeView(deck: deck, reviewMode: false)
         }
         .fullScreenCover(isPresented: $showingReviewMode) {
-            StudyModeView(deck: deck, reviewMode: true)
+            StudyModeView(deck: deck, reviewMode: true, reviewCards: cardsNeedingReview)
+        }
+        .fullScreenCover(isPresented: $showingQuizMode) {
+            QuizModeView(deck: deck)
         }
         .alert("Delete Flashcard", isPresented: $showingDeleteConfirmation) {
             Button("Cancel", role: .cancel) {
@@ -1017,6 +1600,35 @@ struct DeckPageView: View {
         }
     }
     
+    private func shareDeck() {
+        let deckData = exportDeckData()
+        let activityViewController = UIActivityViewController(activityItems: [deckData], applicationActivities: nil)
+        
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let window = windowScene.windows.first,
+           let rootViewController = window.rootViewController {
+            rootViewController.present(activityViewController, animated: true)
+        }
+    }
+    
+    private func exportDeckData() -> String {
+        var deckText = "Deck: \(deck.name ?? "Untitled")\n\n"
+        
+        for flashcard in deck.flashcardsArray {
+            deckText += "Front: \(flashcard.frontText1 ?? "")\n"
+            if let frontText2 = flashcard.frontText2, !frontText2.isEmpty {
+                deckText += "Front 2: \(frontText2)\n"
+            }
+            deckText += "Back: \(flashcard.backText1 ?? "")\n"
+            if let backText2 = flashcard.backText2, !backText2.isEmpty {
+                deckText += "Back 2: \(backText2)\n"
+            }
+            deckText += "\n---\n\n"
+        }
+        
+        return deckText
+    }
+    
     private func startRefreshTimer() {
         stopRefreshTimer()
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
@@ -1041,91 +1653,291 @@ struct DeckPageView: View {
     }
 }
 
-// MARK: - Flashcard Row View
-struct FlashcardRowView: View {
-    let flashcard: Flashcard
-    @State private var refreshToggle = false
-    @State private var refreshTimer: Timer?
+// MARK: - Quiz Mode View
+struct QuizModeView: View {
+    let deck: Deck
+    @Environment(\.managedObjectContext) private var viewContext
+    @Environment(\.presentationMode) var presentationMode
     
-    private var flashcardID: String {
-        flashcard.id?.uuidString ?? "unknown"
-    }
+    @State private var currentCardIndex = 0
+    @State private var quizCards: [Flashcard] = []
+    @State private var currentAnswers: [String] = []
+    @State private var selectedAnswer: Int? = nil
+    @State private var correctAnswerIndex = 0
+    @State private var score = 0
+    @State private var showingResult = false
+    @State private var showingFinalScore = false
+    @State private var hasAnswered = false
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Front")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Text(flashcard.frontText1 ?? "")
-                        .font(.body)
-                        .lineLimit(2)
+        NavigationView {
+            VStack(spacing: 0) {
+                if showingFinalScore {
+                    finalScoreView
+                } else if !quizCards.isEmpty {
+                    quizContentView
+                    answerOptionsView
                 }
-                
-                Spacer()
-                
-                HStack(spacing: 4) {
-                    if FlashAudioManager.shared.hasAudio(flashcardID: flashcardID, side: "front") {
-                        Image(systemName: "speaker.wave.2.fill")
-                            .foregroundColor(.blue)
-                            .font(.caption)
-                    }
-                    
-                    if flashcard.needsReview {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundColor(.orange)
-                            .font(.caption)
+            }
+            .navigationTitle("Quiz Mode")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") {
+                        presentationMode.wrappedValue.dismiss()
                     }
                 }
             }
+        }
+        .onAppear {
+            setupQuiz()
+        }
+    }
+    
+    private var finalScoreView: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "trophy.fill")
+                .font(.system(size: 60))
+                .foregroundColor(Color(red: 1.0, green: 0.84, blue: 0.0))
             
-            Divider()
+            Text("Quiz Complete!")
+                .font(.title.weight(.bold))
+                .fontDesign(.rounded)
+            
+            Text("Final Score: \(Int(Double(score) / Double(quizCards.count) * 100))%")
+                .font(.title2.weight(.semibold))
+                .fontDesign(.rounded)
+                .foregroundColor(.blue)
+            
+            Text("\(score) out of \(quizCards.count) correct")
+                .font(.body)
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    
+    private var quizContentView: some View {
+        VStack(spacing: 20) {
+            Spacer()
+                .frame(height: 30)
             
             HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Back")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Text(flashcard.backText1 ?? "")
-                        .font(.body)
-                        .lineLimit(2)
+                Text("Question \(currentCardIndex + 1) of \(quizCards.count)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Spacer()
+                Text("Score: \(score)/\(quizCards.count)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.blue)
+            }
+            .padding(.horizontal)
+            
+            questionSectionView
+            
+            Spacer()
+        }
+    }
+    
+    private var questionSectionView: some View {
+        let currentCard = quizCards[currentCardIndex]
+        let currentCardID = currentCard.id?.uuidString ?? "unknown"
+        
+        return VStack(spacing: 16) {
+            Text("Listen and Choose the Correct Answer")
+                .font(.headline.weight(.bold))
+                .fontDesign(.rounded)
+                .multilineTextAlignment(.center)
+            
+            if FlashPhotoManager.shared.hasPhoto(flashcardID: currentCardID, side: "front"),
+               let photoPath = FlashPhotoManager.shared.getPhotoPath(flashcardID: currentCardID, side: "front"),
+               let image = UIImage(contentsOfFile: photoPath) {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxHeight: 150)
+                    .cornerRadius(16)
+            }
+            
+            VStack(spacing: 8) {
+                Text(currentCard.frontText1 ?? "")
+                    .font(.title2.weight(.bold))
+                    .fontDesign(.rounded)
+                    .multilineTextAlignment(.center)
+                
+                if let frontText2 = currentCard.frontText2, !frontText2.isEmpty {
+                    Text(frontText2)
+                        .font(.body.weight(.medium))
+                        .fontDesign(.rounded)
+                        .multilineTextAlignment(.center)
                 }
                 
-                Spacer()
-                
-                if FlashAudioManager.shared.hasAudio(flashcardID: flashcardID, side: "back") {
-                    Image(systemName: "speaker.wave.2.fill")
-                        .foregroundColor(.blue)
-                        .font(.caption)
+                if FlashAudioManager.shared.hasAudio(flashcardID: currentCardID, side: "front") {
+                    StudyAudioPlayer(flashcardID: currentCardID, side: "front", label: "🔊 Play Audio")
                 }
             }
         }
         .padding()
-        .background(Color(.systemGray6))
-        .cornerRadius(12)
-        .onAppear {
-            startRefreshTimer()
-        }
-        .onDisappear {
-            stopRefreshTimer()
-        }
-        .onChange(of: refreshToggle) { _ in }
+        .background(
+            LinearGradient(
+                colors: [Color(.systemGray6), Color(.systemGray4)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
+        .cornerRadius(20)
+        .padding(.horizontal)
     }
     
-    private func startRefreshTimer() {
-        stopRefreshTimer()
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
-            refreshToggle.toggle()
+    private var answerOptionsView: some View {
+        VStack(spacing: 12) {
+            ForEach(0..<currentAnswers.count, id: \.self) { index in
+                Button(action: {
+                    if !hasAnswered {
+                        selectedAnswer = index
+                        checkAnswer()
+                    }
+                }) {
+                    HStack {
+                        Text(currentAnswers[index])
+                            .font(.body.weight(.medium))
+                            .fontDesign(.rounded)
+                            .multilineTextAlignment(.leading)
+                        Spacer()
+                        
+                        if hasAnswered {
+                            if index == correctAnswerIndex {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundColor(.green)
+                            } else if index == selectedAnswer {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundColor(.red)
+                            }
+                        }
+                    }
+                    .padding()
+                    .background(
+                        Group {
+                            if hasAnswered {
+                                if index == correctAnswerIndex {
+                                    Color.green.opacity(0.2)
+                                } else if index == selectedAnswer {
+                                    Color.red.opacity(0.2)
+                                } else {
+                                    Color(.systemGray6)
+                                }
+                            } else {
+                                Color(.systemGray6)
+                            }
+                        }
+                    )
+                    .cornerRadius(12)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(
+                                hasAnswered && index == correctAnswerIndex ? Color.green :
+                                hasAnswered && index == selectedAnswer ? Color.red :
+                                Color.clear,
+                                lineWidth: 2
+                            )
+                    )
+                }
+                .disabled(hasAnswered)
+            }
+            
+            if hasAnswered {
+                Button(action: {
+                    nextQuestion()
+                }) {
+                    Text(currentCardIndex < quizCards.count - 1 ? "Next Question" : "Finish Quiz")
+                        .fontWeight(.semibold)
+                        .fontDesign(.rounded)
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(
+                            LinearGradient(
+                                colors: [Color.blue, Color.blue.opacity(0.8)],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .cornerRadius(16)
+                }
+            }
+        }
+        .padding()
+        .background(Color(.systemBackground))
+    }
+    
+    private func setupQuiz() {
+        quizCards = deck.flashcardsArray.shuffled()
+        currentCardIndex = 0
+        score = 0
+        setupCurrentQuestion()
+    }
+    
+    private func setupCurrentQuestion() {
+        guard currentCardIndex < quizCards.count else { return }
+        
+        let currentCard = quizCards[currentCardIndex]
+        let correctAnswer = currentCard.backText1 ?? ""
+        
+        // Get wrong answers from other cards
+        let otherCards = deck.flashcardsArray.filter { $0 != currentCard }
+        let wrongAnswers = otherCards.compactMap { $0.backText1 }.filter { !$0.isEmpty }
+        
+        // Create answer array with 1 correct and 3 wrong answers
+        var answers = [correctAnswer]
+        let shuffledWrongAnswers = wrongAnswers.shuffled()
+        
+        for i in 0..<min(3, shuffledWrongAnswers.count) {
+            answers.append(shuffledWrongAnswers[i])
+        }
+        
+        // Fill with generic wrong answers if needed
+        while answers.count < 4 {
+            answers.append("Answer \(answers.count)")
+        }
+        
+        // Shuffle and find correct index
+        answers.shuffle()
+        correctAnswerIndex = answers.firstIndex(of: correctAnswer) ?? 0
+        currentAnswers = answers
+        
+        selectedAnswer = nil
+        hasAnswered = false
+    }
+    
+    private func checkAnswer() {
+        hasAnswered = true
+        
+        if selectedAnswer == correctAnswerIndex {
+            score += 1
         }
     }
     
-    private func stopRefreshTimer() {
-        refreshTimer?.invalidate()
-        refreshTimer = nil
+    private func nextQuestion() {
+        if currentCardIndex < quizCards.count - 1 {
+            currentCardIndex += 1
+            setupCurrentQuestion()
+        } else {
+            finishQuiz()
+        }
+    }
+    
+    private func finishQuiz() {
+        let finalScore = Double(score) / Double(quizCards.count) * 100
+        deck.lastQuizScore = finalScore
+        
+        do {
+            try viewContext.save()
+        } catch {
+            print("Error saving quiz score: \(error)")
+        }
+        
+        showingFinalScore = true
     }
 }
-
 // MARK: - Create Flashcard View
 struct CreateFlashcardView: View {
     let deck: Deck
@@ -1142,22 +1954,16 @@ struct CreateFlashcardView: View {
         NavigationView {
             ScrollView {
                 VStack(spacing: 24) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Front Side")
-                                .font(.headline.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal)
-                            
-                            VStack {
-                                FlashcardPhotoView(
-                                    flashcardID: flashcardID,
-                                    side: "front",
-                                    title: "Photo"
-                                )
-                            }
+                    // Front Side Section
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("Front Side")
+                            .font(.headline.weight(.semibold))
+                            .fontDesign(.rounded)
+                            .foregroundStyle(.secondary)
                             .padding(.horizontal)
-                            
+                        
+                        VStack(spacing: 16) {
+                            // Text Fields Container
                             VStack(spacing: 8) {
                                 TextField("Front text", text: $frontText1)
                                     .textFieldStyle(.plain)
@@ -1168,38 +1974,46 @@ struct CreateFlashcardView: View {
                                     .textFieldStyle(.plain)
                                     .padding()
                             }
-                            .background(Color(.secondarySystemGroupedBackground))
+                            .background(Color.white)
                             .cornerRadius(15)
-                        }
-                        
-                        VStack {
-                            UserDefaultsAudioView(
-                                title: "Audio",
-                                flashcardID: flashcardID,
-                                side: "front"
-                            )
+                            
+                            // Photo Section
+                            VStack(spacing: 12) {
+                                FlashcardPhotoView(
+                                    flashcardID: flashcardID,
+                                    side: "front",
+                                    title: "Photo"
+                                )
+                            }
+                            .padding()
+                            .background(Color.white)
+                            .cornerRadius(15)
+                            
+                            // Audio Section
+                            VStack(spacing: 12) {
+                                UserDefaultsAudioView(
+                                    title: "Audio",
+                                    flashcardID: flashcardID,
+                                    side: "front"
+                                )
+                            }
+                            .padding()
+                            .background(Color.white)
+                            .cornerRadius(15)
                         }
                         .padding(.horizontal)
                     }
                     
-                    Divider()
-                    
-                    VStack(alignment: .leading, spacing: 12) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Back Side")
-                                .font(.headline.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal)
-                            
-                            VStack {
-                                FlashcardPhotoView(
-                                    flashcardID: flashcardID,
-                                    side: "back",
-                                    title: "Photo"
-                                )
-                            }
+                    // Back Side Section
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("Back Side")
+                            .font(.headline.weight(.semibold))
+                            .fontDesign(.rounded)
+                            .foregroundStyle(.secondary)
                             .padding(.horizontal)
-                            
+                        
+                        VStack(spacing: 16) {
+                            // Text Fields Container
                             VStack(spacing: 8) {
                                 TextField("Back text", text: $backText1)
                                     .textFieldStyle(.plain)
@@ -1210,22 +2024,39 @@ struct CreateFlashcardView: View {
                                     .textFieldStyle(.plain)
                                     .padding()
                             }
-                            .background(Color(.secondarySystemGroupedBackground))
+                            .background(Color.white)
                             .cornerRadius(15)
-                        }
-                        
-                        VStack {
-                            UserDefaultsAudioView(
-                                title: "Audio",
-                                flashcardID: flashcardID,
-                                side: "back"
-                            )
+                            
+                            // Photo Section
+                            VStack(spacing: 12) {
+                                FlashcardPhotoView(
+                                    flashcardID: flashcardID,
+                                    side: "back",
+                                    title: "Photo"
+                                )
+                            }
+                            .padding()
+                            .background(Color.white)
+                            .cornerRadius(15)
+                            
+                            // Audio Section
+                            VStack(spacing: 12) {
+                                UserDefaultsAudioView(
+                                    title: "Audio",
+                                    flashcardID: flashcardID,
+                                    side: "back"
+                                )
+                            }
+                            .padding()
+                            .background(Color.white)
+                            .cornerRadius(15)
                         }
                         .padding(.horizontal)
                     }
                 }
-                .padding()
+                .padding(.vertical)
             }
+            .background(Color(.systemGroupedBackground)) // Light grey background
             .navigationTitle("New Flashcard")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1270,7 +2101,6 @@ struct CreateFlashcardView: View {
         }
     }
 }
-
 // MARK: - Photo View Component
 struct FlashcardPhotoView: View {
     let flashcardID: String
@@ -1285,11 +2115,12 @@ struct FlashcardPhotoView: View {
     
     var body: some View {
         HStack {
-            Spacer()
-            
             Text(title)
                 .font(.subheadline)
                 .fontWeight(.medium)
+                .fontDesign(.rounded)
+            
+            Spacer()
             
             HStack(spacing: 12) {
                 Button(action: {
@@ -1310,14 +2141,17 @@ struct FlashcardPhotoView: View {
                     Button(action: {
                         deletePhoto()
                     }) {
-                        Image(systemName: "trash.circle.fill")
-                            .foregroundColor(.red)
+                        Circle()
+                            .fill(Color.red)
+                            .frame(width: 30, height: 30)
+                            .overlay(
+                                Image(systemName: "trash")
+                                    .foregroundColor(.white)
+                                    .font(.system(size: 12, weight: .medium))
+                            )
                     }
-                    .buttonStyle(BorderedButtonStyle())
                 }
             }
-            
-            Spacer()
         }
         .confirmationDialog("Choose Photo Source", isPresented: $showingPhotoSourceSelection) {
             Button("Take Photo") {
@@ -1493,7 +2327,7 @@ struct PhotoPicker: UIViewControllerRepresentable {
     }
 }
 
-// MARK: - FIXED UserDefaults Audio Component
+// MARK: - Enhanced Audio Component
 struct UserDefaultsAudioView: View {
     let title: String
     let flashcardID: String
@@ -1509,46 +2343,15 @@ struct UserDefaultsAudioView: View {
     
     var body: some View {
         HStack {
-            Spacer()
-            
             Text(title)
                 .font(.subheadline)
                 .fontWeight(.medium)
+                .fontDesign(.rounded)
             
-            HStack(spacing: 12) {
-                Button(action: {
-                    if isRecording {
-                        stopRecording()
-                    } else {
-                        startRecording()
-                    }
-                }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: isRecording ? "stop.circle.fill" : "mic.circle.fill")
-                            .foregroundColor(isRecording ? .red : .white)
-                        Text(isRecording ? "Stop" : "Record")
-                            .font(.caption)
-                            .fixedSize()
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .clipShape(.capsule)
-                
-                Button(action: {
-                    showingAudioPicker = true
-                }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "folder.circle.fill")
-                            .foregroundColor(.blue)
-                        Text("Import")
-                            .font(.caption)
-                            .fixedSize()
-                    }
-                }
-                .buttonStyle(.bordered)
-                .clipShape(.capsule)
-                
-                if hasAudio {
+            Spacer()
+            
+            if hasAudio {
+                HStack(spacing: 12) {
                     Button(action: {
                         if isPlaying {
                             stopPlayback()
@@ -1570,15 +2373,51 @@ struct UserDefaultsAudioView: View {
                     Button(action: {
                         deleteAudio()
                     }) {
-                        Image(systemName: "trash.circle.fill")
-                            .foregroundColor(.red)
+                        Circle()
+                            .fill(Color.red)
+                            .frame(width: 30, height: 30)
+                            .overlay(
+                                Image(systemName: "trash")
+                                    .foregroundColor(.white)
+                                    .font(.system(size: 12, weight: .medium))
+                            )
+                    }
+                }
+            } else {
+                HStack(spacing: 12) {
+                    Button(action: {
+                        if isRecording {
+                            stopRecording()
+                        } else {
+                            startRecording()
+                        }
+                    }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: isRecording ? "stop.circle.fill" : "mic.circle.fill")
+                                .foregroundColor(isRecording ? .red : .white)
+                            Text(isRecording ? "Stop" : "Record")
+                                .font(.caption)
+                                .fixedSize()
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .clipShape(.capsule)
+                    
+                    Button(action: {
+                        showingAudioPicker = true
+                    }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "folder.circle.fill")
+                                .foregroundColor(.blue)
+                            Text("Import")
+                                .font(.caption)
+                                .fixedSize()
+                        }
                     }
                     .buttonStyle(.bordered)
                     .clipShape(.capsule)
                 }
             }
-            
-            Spacer()
         }
         .fileImporter(isPresented: $showingAudioPicker, allowedContentTypes: [.audio]) { result in
             switch result {
@@ -1654,7 +2493,6 @@ struct UserDefaultsAudioView: View {
         }
     }
     
-    // FIXED AUDIO PLAYBACK - No more freezing
     private func playAudio() {
         // Stop any existing playback first
         stopPlayback()
@@ -1770,89 +2608,23 @@ struct FlashcardDetailView: View {
                 .foregroundColor(.secondary)
                 .padding(.top)
             
-            VStack(spacing: 16) {
+            VStack(spacing: 0) {
                 if isShowingBack {
-                    VStack(spacing: 16) {
-                        // Photo at the top (upper half)
-                        if let image = backPhotoImage {
-                            Image(uiImage: image)
-                                .resizable()
-                                .aspectRatio(contentMode: .fit)
-                                .frame(maxHeight: 200)
-                                .cornerRadius(12)
-                        }
-                        
-                        // Text and audio at the bottom (lower half)
-                        VStack(spacing: 12) {
-                            TextField("Back text 1", text: $backText1)
-                                .font(.title2)
-                                .multilineTextAlignment(.center)
-                                .textFieldStyle(PlainTextFieldStyle())
-                            
-                            if !backText2.isEmpty {
-                                TextField("Back text 2", text: $backText2)
-                                    .font(.body)
-                                    .multilineTextAlignment(.center)
-                                    .textFieldStyle(PlainTextFieldStyle())
-                            }
-                            
-                            FlashcardPhotoView(
-                                flashcardID: flashcardID,
-                                side: "back",
-                                title: "Back Photo"
-                            )
-                            
-                            UserDefaultsAudioView(
-                                title: "Back Audio",
-                                flashcardID: flashcardID,
-                                side: "back"
-                            )
-                        }
-                    }
+                    backSideContent
                 } else {
-                    VStack(spacing: 16) {
-                        // Photo at the top (upper half)
-                        if let image = frontPhotoImage {
-                            Image(uiImage: image)
-                                .resizable()
-                                .aspectRatio(contentMode: .fit)
-                                .frame(maxHeight: 200)
-                                .cornerRadius(12)
-                        }
-                        
-                        // Text and audio at the bottom (lower half)
-                        VStack(spacing: 12) {
-                            TextField("Front text 1", text: $frontText1)
-                                .font(.title2)
-                                .multilineTextAlignment(.center)
-                                .textFieldStyle(PlainTextFieldStyle())
-                            
-                            if !frontText2.isEmpty {
-                                TextField("Front text 2", text: $frontText2)
-                                    .font(.body)
-                                    .multilineTextAlignment(.center)
-                                    .textFieldStyle(PlainTextFieldStyle())
-                            }
-                            
-                            FlashcardPhotoView(
-                                flashcardID: flashcardID,
-                                side: "front",
-                                title: "Front Photo"
-                            )
-                            
-                            UserDefaultsAudioView(
-                                title: "Front Audio",
-                                flashcardID: flashcardID,
-                                side: "front"
-                            )
-                        }
-                    }
+                    frontSideContent
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding()
-            .background(Color(.systemGray6))
-            .cornerRadius(12)
+            .background(
+                LinearGradient(
+                    colors: [Color(.systemGray6), Color(.systemGray4)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+            .cornerRadius(20)
             .onTapGesture {
                 saveChanges()
                 withAnimation(.easeInOut(duration: 0.3)) {
@@ -1886,6 +2658,198 @@ struct FlashcardDetailView: View {
         }
         .onChange(of: refreshToggle) { _ in
             refreshPhotos()
+        }
+    }
+    
+    private var frontSideContent: some View {
+        VStack(spacing: 0) {
+            // Conditional layout based on photo presence
+            if let image = frontPhotoImage {
+                // Layout with photo - move image and text upward together
+                VStack(spacing: 16) {
+                    // Small spacer to move content up from top
+                    Spacer()
+                        .frame(height: 40)
+                    
+                    // Photo positioned higher
+                    Image(uiImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxHeight: 200)
+                        .cornerRadius(16)
+                    
+                    // Text directly below photo
+                    VStack(spacing: 12) {
+                        TextField("Front text 1", text: $frontText1)
+                            .font(.title2.weight(.bold))
+                            .fontDesign(.rounded)
+                            .multilineTextAlignment(.center)
+                            .textFieldStyle(PlainTextFieldStyle())
+                        
+                        if !frontText2.isEmpty {
+                            TextField("Front text 2", text: $frontText2)
+                                .font(.body.weight(.medium))
+                                .fontDesign(.rounded)
+                                .multilineTextAlignment(.center)
+                                .textFieldStyle(PlainTextFieldStyle())
+                        }
+                    }
+                    
+                    Spacer()
+                    
+                    // Controls at bottom
+                    VStack(spacing: 12) {
+                        FlashcardPhotoView(
+                            flashcardID: flashcardID,
+                            side: "front",
+                            title: "Front Photo"
+                        )
+                        
+                        UserDefaultsAudioView(
+                            title: "Front Audio",
+                            flashcardID: flashcardID,
+                            side: "front"
+                        )
+                    }
+                    .padding(.bottom, 10)
+                }
+            } else {
+                // Layout without photo - text centered vertically
+                VStack(spacing: 0) {
+                    Spacer()
+                    
+                    // Centered text when no photo
+                    VStack(spacing: 12) {
+                        TextField("Front text 1", text: $frontText1)
+                            .font(.title2.weight(.bold))
+                            .fontDesign(.rounded)
+                            .multilineTextAlignment(.center)
+                            .textFieldStyle(PlainTextFieldStyle())
+                        
+                        if !frontText2.isEmpty {
+                            TextField("Front text 2", text: $frontText2)
+                                .font(.body.weight(.medium))
+                                .fontDesign(.rounded)
+                                .multilineTextAlignment(.center)
+                                .textFieldStyle(PlainTextFieldStyle())
+                        }
+                    }
+                    
+                    Spacer()
+                    
+                    // Controls at bottom
+                    VStack(spacing: 12) {
+                        FlashcardPhotoView(
+                            flashcardID: flashcardID,
+                            side: "front",
+                            title: "Front Photo"
+                        )
+                        
+                        UserDefaultsAudioView(
+                            title: "Front Audio",
+                            flashcardID: flashcardID,
+                            side: "front"
+                        )
+                    }
+                    .padding(.bottom, 10)
+                }
+            }
+        }
+    }
+    
+    private var backSideContent: some View {
+        VStack(spacing: 0) {
+            // Conditional layout based on photo presence
+            if let image = backPhotoImage {
+                // Layout with photo - move image and text upward together
+                VStack(spacing: 16) {
+                    // Small spacer to move content up from top
+                    Spacer()
+                        .frame(height: 40)
+                    
+                    // Photo positioned higher
+                    Image(uiImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxHeight: 200)
+                        .cornerRadius(16)
+                    
+                    // Text directly below photo
+                    VStack(spacing: 12) {
+                        TextField("Back text 1", text: $backText1)
+                            .font(.title2.weight(.bold))
+                            .fontDesign(.rounded)
+                            .multilineTextAlignment(.center)
+                            .textFieldStyle(PlainTextFieldStyle())
+                        
+                        if !backText2.isEmpty {
+                            TextField("Back text 2", text: $backText2)
+                                .font(.body.weight(.medium))
+                                .fontDesign(.rounded)
+                                .multilineTextAlignment(.center)
+                                .textFieldStyle(PlainTextFieldStyle())
+                        }
+                    }
+                    
+                    Spacer()
+                    
+                    // Controls at bottom
+                    VStack(spacing: 12) {
+                        FlashcardPhotoView(
+                            flashcardID: flashcardID,
+                            side: "back",
+                            title: "Back Photo"
+                        )
+                        
+                        UserDefaultsAudioView(
+                            title: "Back Audio",
+                            flashcardID: flashcardID,
+                            side: "back"
+                        )
+                    }
+                    .padding(.bottom, 10)
+                }
+            } else {
+                // Layout without photo - text centered vertically
+                VStack(spacing: 0) {
+                    Spacer()
+                    
+                    // Centered text when no photo
+                    VStack(spacing: 12) {
+                        TextField("Back text 1", text: $backText1)
+                            .font(.title2.weight(.bold))
+                            .fontDesign(.rounded)
+                            .multilineTextAlignment(.center)
+                            .textFieldStyle(PlainTextFieldStyle())
+                        
+                        if !backText2.isEmpty {
+                            TextField("Back text 2", text: $backText2)
+                                .font(.body.weight(.medium))
+                                .fontDesign(.rounded)
+                                .multilineTextAlignment(.center)
+                                .textFieldStyle(PlainTextFieldStyle())
+                        }
+                    }
+                    
+                    Spacer()
+                    
+                    // Controls at bottom
+                    VStack(spacing: 12) {
+                        FlashcardPhotoView(
+                            flashcardID: flashcardID,
+                            side: "back",
+                            title: "Back Photo"
+                        )
+                        
+                        UserDefaultsAudioView(
+                            title: "Back Audio",
+                            flashcardID: flashcardID,
+                            side: "back"
+                        )
+                    }
+                    .padding(.bottom, 10)
+                }
+            }
         }
     }
     
@@ -1933,11 +2897,11 @@ struct FlashcardDetailView: View {
         }
     }
 }
-
 // MARK: - Study Mode View
 struct StudyModeView: View {
     let deck: Deck
     let reviewMode: Bool
+    var reviewCards: [Flashcard] = []
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.presentationMode) var presentationMode
     
@@ -1945,151 +2909,22 @@ struct StudyModeView: View {
     @State private var isShowingBack = false
     @State private var studyCards: [Flashcard] = []
     @State private var showingReviewPrompt = false
-    @State private var reviewCards: [Flashcard] = []
+    @State private var remainingReviewCards: [Flashcard] = []
     @State private var studyingReviewCards = false
     @State private var showingCompletionAlert = false
     @State private var completionMessage = ""
+    @State private var hasReviewCardsAvailable = false
     
     var body: some View {
         NavigationView {
             VStack(spacing: 20) {
                 if studyCards.isEmpty {
-                    VStack(spacing: 20) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 60))
-                            .foregroundColor(.green)
-                        Text("Study Session Complete!")
-                            .font(.title2)
-                            .fontWeight(.semibold)
-                        Text(completionMessage)
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.center)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    completionView
                 } else {
-                    HStack {
-                        Text("\(currentCardIndex + 1) of \(studyCards.count)")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        Spacer()
-                        if reviewMode || studyingReviewCards {
-                            Text("Review Mode")
-                                .font(.caption)
-                                .foregroundColor(.orange)
-                        }
-                    }
-                    .padding(.horizontal)
-                    
-                    let currentCard = studyCards[currentCardIndex]
-                    let currentCardID = currentCard.id?.uuidString ?? "unknown"
-                    
-                    VStack(spacing: 16) {
-                        Text(isShowingBack ? "Back" : "Front")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        
-                        VStack(spacing: 12) {
-                            if isShowingBack {
-                                // Photo at the top (upper half)
-                                if FlashPhotoManager.shared.hasPhoto(flashcardID: currentCardID, side: "back"),
-                                   let photoPath = FlashPhotoManager.shared.getPhotoPath(flashcardID: currentCardID, side: "back"),
-                                   let image = UIImage(contentsOfFile: photoPath) {
-                                    Image(uiImage: image)
-                                        .resizable()
-                                        .aspectRatio(contentMode: .fit)
-                                        .frame(maxHeight: 200)
-                                        .cornerRadius(12)
-                                }
-                                
-                                // Text and audio at the bottom (lower half)
-                                VStack(spacing: 8) {
-                                    Text(currentCard.backText1 ?? "")
-                                        .font(.title2)
-                                        .multilineTextAlignment(.center)
-                                    if let backText2 = currentCard.backText2, !backText2.isEmpty {
-                                        Text(backText2)
-                                            .font(.body)
-                                            .multilineTextAlignment(.center)
-                                    }
-                                    
-                                    if FlashAudioManager.shared.hasAudio(flashcardID: currentCardID, side: "back") {
-                                        StudyAudioPlayer(flashcardID: currentCardID, side: "back", label: "🔊 Back Audio")
-                                    }
-                                }
-                            } else {
-                                // Photo at the top (upper half)
-                                if FlashPhotoManager.shared.hasPhoto(flashcardID: currentCardID, side: "front"),
-                                   let photoPath = FlashPhotoManager.shared.getPhotoPath(flashcardID: currentCardID, side: "front"),
-                                   let image = UIImage(contentsOfFile: photoPath) {
-                                    Image(uiImage: image)
-                                        .resizable()
-                                        .aspectRatio(contentMode: .fit)
-                                        .frame(maxHeight: 200)
-                                        .cornerRadius(12)
-                                }
-                                
-                                // Text and audio at the bottom (lower half)
-                                VStack(spacing: 8) {
-                                    Text(currentCard.frontText1 ?? "")
-                                        .font(.title2)
-                                        .multilineTextAlignment(.center)
-                                    if let frontText2 = currentCard.frontText2, !frontText2.isEmpty {
-                                        Text(frontText2)
-                                            .font(.body)
-                                            .multilineTextAlignment(.center)
-                                    }
-                                    
-                                    if FlashAudioManager.shared.hasAudio(flashcardID: currentCardID, side: "front") {
-                                        StudyAudioPlayer(flashcardID: currentCardID, side: "front", label: "🔊 Front Audio")
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding()
-                    .background(Color(.systemGray6))
-                    .cornerRadius(12)
-                    .onTapGesture {
-                        withAnimation(.easeInOut(duration: 0.3)) {
-                            isShowingBack.toggle()
-                        }
-                    }
-                    
-                    Text("Tap card to flip")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    
-                    HStack(spacing: 20) {
-                        Button(action: {
-                            markIncorrect()
-                        }) {
-                            HStack {
-                                Image(systemName: "xmark.circle.fill")
-                                Text("Incorrect")
-                            }
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(Color.red)
-                            .cornerRadius(12)
-                        }
-                        
-                        Button(action: {
-                            markCorrect()
-                        }) {
-                            HStack {
-                                Image(systemName: "checkmark.circle.fill")
-                                Text("Correct")
-                            }
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(Color.green)
-                            .cornerRadius(12)
-                        }
-                    }
-                    .padding(.horizontal)
+                    progressHeaderView
+                    studyCardDisplayView
+                    instructionTextView
+                    actionButtonsView
                 }
                 
                 Spacer()
@@ -2106,29 +2941,372 @@ struct StudyModeView: View {
         }
         .onAppear {
             setupStudySession()
-        }
-        .alert("Review More Cards?", isPresented: $showingReviewPrompt) {
-            Button("Yes") {
-                startReviewMode()
+            // Start timing for first card
+            if !studyCards.isEmpty {
+                let firstCardID = studyCards[0].id?.uuidString ?? "unknown"
+                SpacedRepetitionManager.shared.startTimer(for: firstCardID)
             }
-            Button("No") {
-                presentationMode.wrappedValue.dismiss()
-            }
-        } message: {
-            Text("Would you like to review cards that need further review?")
         }
-        .alert("Deck Mastered!", isPresented: $showingCompletionAlert) {
-            Button("Great!") {
-                presentationMode.wrappedValue.dismiss()
+    }
+    
+    private var completionView: some View {
+        VStack(spacing: 20) {
+            // Check if this is a deck mastery completion
+            if completionMessage.contains("mastered") {
+                Image(systemName: "crown.fill")
+                    .font(.system(size: 60))
+                    .foregroundColor(Color(red: 1.0, green: 0.84, blue: 0.0)) // Gold color
+                
+                Text("Deck Mastered!")
+                    .font(.title.weight(.bold))
+                    .fontDesign(.rounded)
+                    .foregroundColor(.primary)
+                
+                Text("🎉 Congratulations! 🎉")
+                    .font(.title2.weight(.semibold))
+                    .fontDesign(.rounded)
+                    .foregroundColor(.green)
+                
+                Text("You've mastered this entire deck!")
+                    .font(.body)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+            } else {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 60))
+                    .foregroundColor(.green)
+                
+                Text("Study Session Complete!")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                    .fontDesign(.rounded)
+                
+                Text(completionMessage)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
             }
-        } message: {
-            Text("Congratulations! You've mastered this deck!")
+            
+            // Show review option if cards need review (only for regular study mode)
+            if hasReviewCardsAvailable && !reviewMode && !studyingReviewCards {
+                VStack(spacing: 16) {
+                    Text("Some cards need more review")
+                        .font(.headline)
+                        .fontDesign(.rounded)
+                        .foregroundColor(.orange)
+                    
+                    HStack(spacing: 16) {
+                        Button("Finish") {
+                            checkDeckMastery()
+                        }
+                        .font(.body.weight(.semibold))
+                        .fontDesign(.rounded)
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 10)
+                        .background(Color(.systemGray5))
+                        .cornerRadius(10)
+                        
+                        Button("Review Cards") {
+                            startReviewMode()
+                        }
+                        .font(.body.weight(.semibold))
+                        .fontDesign(.rounded)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 10)
+                        .background(
+                            LinearGradient(
+                                colors: [Color.orange, Color.orange.opacity(0.8)],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .cornerRadius(10)
+                    }
+                }
+                .padding(.top, 20)
+            }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            // Auto-dismiss logic
+            if completionMessage.contains("mastered") {
+                // Deck mastered - longer celebration time
+                return // Don't auto-dismiss, handled in checkDeckMastery
+            } else if !hasReviewCardsAvailable && !reviewMode && !studyingReviewCards {
+                // Regular completion with no review cards
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                    presentationMode.wrappedValue.dismiss()
+                }
+            }
+            // If in review mode or has review cards, wait for user action
+        }
+    }
+    
+    private var progressHeaderView: some View {
+        HStack {
+            Text("\(currentCardIndex + 1) of \(studyCards.count)")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            Spacer()
+            if reviewMode || studyingReviewCards {
+                Text("Review Mode")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+            }
+        }
+        .padding(.horizontal)
+    }
+    
+    private var studyCardDisplayView: some View {
+        let currentCard = studyCards[currentCardIndex]
+        let currentCardID = currentCard.id?.uuidString ?? "unknown"
+        
+        return VStack(spacing: 0) {
+            if isShowingBack {
+                // Back side content with improved layout
+                if FlashPhotoManager.shared.hasPhoto(flashcardID: currentCardID, side: "back"),
+                   let photoPath = FlashPhotoManager.shared.getPhotoPath(flashcardID: currentCardID, side: "back"),
+                   let image = UIImage(contentsOfFile: photoPath) {
+                    // Layout with photo - center image and text together
+                    VStack(spacing: 0) {
+                        Text("Back")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .padding(.top)
+                        
+                        Spacer()
+                        
+                        VStack(spacing: 20) {
+                            // Image centered
+                            Image(uiImage: image)
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .frame(maxHeight: 180)
+                                .cornerRadius(16)
+                            
+                            // Text centered below image
+                            VStack(spacing: 8) {
+                                Text(currentCard.backText1 ?? "")
+                                    .font(.title2.weight(.bold))
+                                    .fontDesign(.rounded)
+                                    .multilineTextAlignment(.center)
+                                if let backText2 = currentCard.backText2, !backText2.isEmpty {
+                                    Text(backText2)
+                                        .font(.body.weight(.medium))
+                                        .fontDesign(.rounded)
+                                        .multilineTextAlignment(.center)
+                                }
+                                
+                                if FlashAudioManager.shared.hasAudio(flashcardID: currentCardID, side: "back") {
+                                    StudyAudioPlayer(flashcardID: currentCardID, side: "back", label: "🔊 Back Audio")
+                                }
+                            }
+                        }
+                        
+                        Spacer()
+                    }
+                } else {
+                    // Layout without photo - text centered vertically
+                    VStack(spacing: 0) {
+                        Text("Back")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .padding(.top)
+                        
+                        Spacer()
+                        
+                        VStack(spacing: 8) {
+                            Text(currentCard.backText1 ?? "")
+                                .font(.title2.weight(.bold))
+                                .fontDesign(.rounded)
+                                .multilineTextAlignment(.center)
+                            if let backText2 = currentCard.backText2, !backText2.isEmpty {
+                                Text(backText2)
+                                    .font(.body.weight(.medium))
+                                    .fontDesign(.rounded)
+                                    .multilineTextAlignment(.center)
+                            }
+                            
+                            if FlashAudioManager.shared.hasAudio(flashcardID: currentCardID, side: "back") {
+                                StudyAudioPlayer(flashcardID: currentCardID, side: "back", label: "🔊 Back Audio")
+                            }
+                        }
+                        
+                        Spacer()
+                    }
+                }
+            } else {
+                // Front side content with improved layout
+                if FlashPhotoManager.shared.hasPhoto(flashcardID: currentCardID, side: "front"),
+                   let photoPath = FlashPhotoManager.shared.getPhotoPath(flashcardID: currentCardID, side: "front"),
+                   let image = UIImage(contentsOfFile: photoPath) {
+                    // Layout with photo - center image and text together
+                    VStack(spacing: 0) {
+                        Text("Front")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .padding(.top)
+                        
+                        Spacer()
+                        
+                        VStack(spacing: 20) {
+                            // Image centered
+                            Image(uiImage: image)
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .frame(maxHeight: 180)
+                                .cornerRadius(16)
+                            
+                            // Text centered below image
+                            VStack(spacing: 8) {
+                                Text(currentCard.frontText1 ?? "")
+                                    .font(.title2.weight(.bold))
+                                    .fontDesign(.rounded)
+                                    .multilineTextAlignment(.center)
+                                if let frontText2 = currentCard.frontText2, !frontText2.isEmpty {
+                                    Text(frontText2)
+                                        .font(.body.weight(.medium))
+                                        .fontDesign(.rounded)
+                                        .multilineTextAlignment(.center)
+                                }
+                                
+                                if FlashAudioManager.shared.hasAudio(flashcardID: currentCardID, side: "front") {
+                                    StudyAudioPlayer(flashcardID: currentCardID, side: "front", label: "🔊 Front Audio")
+                                }
+                            }
+                        }
+                        
+                        Spacer()
+                    }
+                } else {
+                    // Layout without photo - text centered vertically
+                    VStack(spacing: 0) {
+                        Text("Front")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .padding(.top)
+                        
+                        Spacer()
+                        
+                        VStack(spacing: 8) {
+                            Text(currentCard.frontText1 ?? "")
+                                .font(.title2.weight(.bold))
+                                .fontDesign(.rounded)
+                                .multilineTextAlignment(.center)
+                            if let frontText2 = currentCard.frontText2, !frontText2.isEmpty {
+                                Text(frontText2)
+                                    .font(.body.weight(.medium))
+                                    .fontDesign(.rounded)
+                                    .multilineTextAlignment(.center)
+                            }
+                            
+                            if FlashAudioManager.shared.hasAudio(flashcardID: currentCardID, side: "front") {
+                                StudyAudioPlayer(flashcardID: currentCardID, side: "front", label: "🔊 Front Audio")
+                            }
+                        }
+                        
+                        Spacer()
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding()
+        .background(
+            LinearGradient(
+                colors: [Color(.systemGray6), Color(.systemGray4)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
+        .cornerRadius(20)
+        .onTapGesture {
+            withAnimation(.easeInOut(duration: 0.3)) {
+                isShowingBack.toggle()
+            }
+        }
+        .gesture(
+            DragGesture()
+                .onEnded { value in
+                    if value.translation.width > 50 {
+                        // Swipe right - mark correct
+                        withAnimation {
+                            markCorrect()
+                        }
+                    } else if value.translation.width < -50 {
+                        // Swipe left - mark incorrect
+                        withAnimation {
+                            markIncorrect()
+                        }
+                    }
+                }
+        )
+    }
+    
+    private var instructionTextView: some View {
+        Text("Tap card to flip • Swipe right for correct • Swipe left for incorrect")
+            .font(.caption)
+            .foregroundColor(.secondary)
+            .multilineTextAlignment(.center)
+    }
+    
+    private var actionButtonsView: some View {
+        HStack(spacing: 20) {
+            Button(action: {
+                withAnimation {
+                    markIncorrect()
+                }
+            }) {
+                HStack {
+                    Image(systemName: "xmark.circle.fill")
+                    Text("Incorrect")
+                        .fontWeight(.semibold)
+                        .fontDesign(.rounded)
+                }
+                .foregroundColor(.white)
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(
+                    LinearGradient(
+                        colors: [Color.red, Color.red.opacity(0.8)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .cornerRadius(16)
+            }
+            
+            Button(action: {
+                withAnimation {
+                    markCorrect()
+                }
+            }) {
+                HStack {
+                    Image(systemName: "checkmark.circle.fill")
+                    Text("Correct")
+                        .fontWeight(.semibold)
+                        .fontDesign(.rounded)
+                }
+                .foregroundColor(.white)
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(
+                    LinearGradient(
+                        colors: [Color.green, Color.green.opacity(0.8)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .cornerRadius(16)
+            }
+        }
+        .padding(.horizontal)
     }
     
     private func setupStudySession() {
         if reviewMode {
-            studyCards = deck.flashcardsArray.filter { $0.needsReview }.shuffled()
+            studyCards = reviewCards.isEmpty ? deck.flashcardsArray.filter { $0.needsReview }.shuffled() : reviewCards.shuffled()
             studyingReviewCards = true
             completionMessage = "You've finished reviewing the missed cards!"
         } else {
@@ -2143,6 +3321,11 @@ struct StudyModeView: View {
     
     private func markCorrect() {
         let currentCard = studyCards[currentCardIndex]
+        let cardID = currentCard.id?.uuidString ?? "unknown"
+        
+        // End timing
+        SpacedRepetitionManager.shared.endTimer(for: cardID)
+        
         currentCard.correctStreak += 1
         
         if (reviewMode || studyingReviewCards) && currentCard.correctStreak >= 3 {
@@ -2154,6 +3337,11 @@ struct StudyModeView: View {
     
     private func markIncorrect() {
         let currentCard = studyCards[currentCardIndex]
+        let cardID = currentCard.id?.uuidString ?? "unknown"
+        
+        // End timing
+        SpacedRepetitionManager.shared.endTimer(for: cardID)
+        
         currentCard.needsReview = true
         currentCard.correctStreak = 0
         
@@ -2170,6 +3358,11 @@ struct StudyModeView: View {
         if currentCardIndex < studyCards.count - 1 {
             currentCardIndex += 1
             isShowingBack = false
+            
+            // Start timing for next card
+            let nextCard = studyCards[currentCardIndex]
+            let nextCardID = nextCard.id?.uuidString ?? "unknown"
+            SpacedRepetitionManager.shared.startTimer(for: nextCardID)
         } else {
             finishStudySession()
         }
@@ -2181,21 +3374,31 @@ struct StudyModeView: View {
         } else if studyingReviewCards {
             checkDeckMastery()
         } else {
-            reviewCards = deck.flashcardsArray.filter { $0.needsReview }
-            if !reviewCards.isEmpty {
-                showingReviewPrompt = true
+            remainingReviewCards = deck.flashcardsArray.filter { $0.needsReview }
+            if !remainingReviewCards.isEmpty {
+                // Set flag to show review option on completion screen
+                hasReviewCardsAvailable = true
+                studyCards.removeAll() // This will trigger the completion view
             } else {
-                checkDeckMastery()
+                // No review cards needed - show completion and auto-dismiss
+                hasReviewCardsAvailable = false
+                studyCards.removeAll()
             }
         }
     }
     
     private func startReviewMode() {
-        studyCards = reviewCards.shuffled()
+        studyCards = remainingReviewCards.shuffled()
         studyingReviewCards = true
         currentCardIndex = 0
         isShowingBack = false
         completionMessage = "You've finished reviewing the missed cards!"
+        
+        // Start timing for first review card
+        if !studyCards.isEmpty {
+            let firstCardID = studyCards[0].id?.uuidString ?? "unknown"
+            SpacedRepetitionManager.shared.startTimer(for: firstCardID)
+        }
     }
     
     private func checkDeckMastery() {
@@ -2207,17 +3410,24 @@ struct StudyModeView: View {
             deck.isMastered = true
             do {
                 try viewContext.save()
-                showingCompletionAlert = true
+                // Show mastery completion screen instead of popup
+                completionMessage = "Congratulations! You've mastered this deck!"
+                studyCards.removeAll() // Show completion view
+                
+                // Auto-dismiss after celebrating
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                    presentationMode.wrappedValue.dismiss()
+                }
             } catch {
                 print("Error updating deck mastery: \(error)")
+                presentationMode.wrappedValue.dismiss()
             }
         } else {
             presentationMode.wrappedValue.dismiss()
         }
     }
 }
-
-// MARK: - FIXED Study Audio Player
+// MARK: - Study Audio Player
 struct StudyAudioPlayer: View {
     let flashcardID: String
     let side: String
@@ -2240,6 +3450,7 @@ struct StudyAudioPlayer: View {
                     .foregroundColor(isPlaying ? .orange : .blue)
                 Text(isPlaying ? "Stop" : label)
                     .font(.caption)
+                    .fontDesign(.rounded)
             }
         }
         .buttonStyle(BorderedButtonStyle())
@@ -2362,6 +3573,10 @@ extension Deck {
         let set = flashcards as? Set<Flashcard> ?? []
         return set.sorted { ($0.createdDate ?? Date()) < ($1.createdDate ?? Date()) }
     }
+}
+
+extension Color {
+    static let gold = Color(red: 1.0, green: 0.84, blue: 0.0)
 }
 
 // MARK: - Preview Provider
