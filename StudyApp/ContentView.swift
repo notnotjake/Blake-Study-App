@@ -1974,7 +1974,7 @@ struct CreateFlashcardView: View {
                                     .textFieldStyle(.plain)
                                     .padding()
                             }
-                            .background(Color.white)
+                            .background(Color(.secondarySystemGroupedBackground))
                             .cornerRadius(15)
                             
                             // Photo Section
@@ -1986,7 +1986,7 @@ struct CreateFlashcardView: View {
                                 )
                             }
                             .padding()
-                            .background(Color.white)
+                            .background(Color(.secondarySystemGroupedBackground))
                             .cornerRadius(15)
                             
                             // Audio Section
@@ -1998,7 +1998,7 @@ struct CreateFlashcardView: View {
                                 )
                             }
                             .padding()
-                            .background(Color.white)
+                            .background(Color(.secondarySystemGroupedBackground))
                             .cornerRadius(15)
                         }
                         .padding(.horizontal)
@@ -2024,7 +2024,7 @@ struct CreateFlashcardView: View {
                                     .textFieldStyle(.plain)
                                     .padding()
                             }
-                            .background(Color.white)
+                            .background(Color(.secondarySystemGroupedBackground))
                             .cornerRadius(15)
                             
                             // Photo Section
@@ -2036,7 +2036,7 @@ struct CreateFlashcardView: View {
                                 )
                             }
                             .padding()
-                            .background(Color.white)
+                            .background(Color(.secondarySystemGroupedBackground))
                             .cornerRadius(15)
                             
                             // Audio Section
@@ -2048,7 +2048,7 @@ struct CreateFlashcardView: View {
                                 )
                             }
                             .padding()
-                            .background(Color.white)
+                            .background(Color(.secondarySystemGroupedBackground))
                             .cornerRadius(15)
                         }
                         .padding(.horizontal)
